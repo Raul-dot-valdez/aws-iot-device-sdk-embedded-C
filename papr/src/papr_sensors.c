@@ -7,11 +7,9 @@ papr_status_t papr_sensors_init(papr_sensors_t *s)
     s->flow_lpm          = 0U;
     s->pressure_pa       = 0U;
     s->temperature_c10   = 0;
-    s->motor_rpm         = 0U;
     s->flow_valid        = false;
     s->pressure_valid    = false;
     s->temperature_valid = false;
-    s->rpm_valid         = false;
     return PAPR_OK;
 }
 
@@ -31,15 +29,11 @@ papr_status_t papr_sensors_update(papr_sensors_t *s)
     s->temperature_valid = (papr_hal_read_temperature_c10(&v_s) == PAPR_OK);
     if (s->temperature_valid) { s->temperature_c10 = v_s; }
 
-    s->rpm_valid         = (papr_hal_read_motor_rpm(&v16)       == PAPR_OK);
-    if (s->rpm_valid)         { s->motor_rpm = v16; }
-
     return papr_sensors_all_valid(s) ? PAPR_OK : PAPR_ERR_HW;
 }
 
 bool papr_sensors_all_valid(const papr_sensors_t *s)
 {
     if (s == NULL) { return false; }
-    return s->flow_valid && s->pressure_valid &&
-           s->temperature_valid && s->rpm_valid;
+    return s->flow_valid && s->pressure_valid && s->temperature_valid;
 }

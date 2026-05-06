@@ -1,6 +1,5 @@
 #include "papr_blower.h"
 #include "papr_config.h"
-#include "papr_hal.h"
 
 static int32_t clamp_i32(int32_t v, int32_t lo, int32_t hi)
 {
@@ -17,10 +16,10 @@ papr_status_t papr_blower_init(papr_blower_t *b)
     b->kd_q16        = PAPR_PID_KD_Q16;
     b->integral      = 0;
     b->prev_error    = 0;
-    b->duty          = 0;
+    b->current_ma    = 0U;
     b->setpoint_lpm  = PAPR_FLOW_LOW_LPM;
     b->saturated     = false;
-    return papr_hal_blower_set_duty(0);
+    return papr_l6235_init(&b->driver);
 }
 
 papr_status_t papr_blower_start(papr_blower_t *b)
@@ -28,16 +27,15 @@ papr_status_t papr_blower_start(papr_blower_t *b)
     if (b == NULL) { return PAPR_ERR_PARAM; }
     b->integral   = 0;
     b->prev_error = 0;
-    b->duty       = 0;
-    return papr_hal_blower_enable(true);
+    b->current_ma = 0U;
+    return papr_l6235_start(&b->driver);
 }
 
 papr_status_t papr_blower_stop(papr_blower_t *b)
 {
     if (b == NULL) { return PAPR_ERR_PARAM; }
-    b->duty = 0;
-    (void)papr_hal_blower_set_duty(0);
-    return papr_hal_blower_enable(false);
+    b->current_ma = 0U;
+    return papr_l6235_stop(&b->driver);
 }
 
 void papr_blower_set_target(papr_blower_t *b, uint16_t lpm)
@@ -51,14 +49,23 @@ papr_status_t papr_blower_update(papr_blower_t *b,
 {
     if (b == NULL || dt_ms == 0U) { return PAPR_ERR_PARAM; }
 
+    (void)papr_l6235_poll(&b->driver);
+    if (papr_l6235_has_fault(&b->driver))
+    {
+        b->current_ma = 0U;
+        return PAPR_ERR_HW;
+    }
+
     int32_t error  = (int32_t)b->setpoint_lpm - (int32_t)measured_lpm;
     int32_t dt     = (int32_t)dt_ms;
 
     /* Anti-windup: skip integration when the actuator is saturated and the
      * error pushes further into saturation. */
-    if (!(b->saturated &&
-          ((b->duty >= PAPR_PWM_MAX && error > 0) ||
-           (b->duty == 0U          && error < 0))))
+    bool clamp_high = b->saturated &&
+                      (b->current_ma >= PAPR_L6235_IMAX_MA) && (error > 0);
+    bool clamp_low  = b->saturated &&
+                      (b->current_ma == 0U) && (error < 0);
+    if (!clamp_high && !clamp_low)
     {
         b->integral += error * dt;
         b->integral  = clamp_i32(b->integral, -1000000, 1000000);
@@ -71,17 +78,25 @@ papr_status_t papr_blower_update(papr_blower_t *b,
                     + ((int64_t)b->ki_q16 * b->integral) / 1000
                     + ((int64_t)b->kd_q16 * derivative)  / 1000;
 
-    int32_t duty = (int32_t)(out_q16 >> 16);
-    duty         = clamp_i32(duty, 0, (int32_t)PAPR_PWM_MAX);
-    b->saturated = (duty == 0 || duty == (int32_t)PAPR_PWM_MAX);
-    b->duty      = (uint16_t)duty;
+    int32_t cmd_ma = (int32_t)(out_q16 >> 16);
+    cmd_ma         = clamp_i32(cmd_ma, 0, (int32_t)PAPR_L6235_IMAX_MA);
+    b->saturated   = (cmd_ma == 0 || cmd_ma == (int32_t)PAPR_L6235_IMAX_MA);
+    b->current_ma  = (uint16_t)cmd_ma;
 
-    return papr_hal_blower_set_duty(b->duty);
+    return papr_l6235_set_current_ma(&b->driver, b->current_ma);
 }
 
 uint16_t papr_blower_duty_permille(const papr_blower_t *b)
 {
-    if (b == NULL || PAPR_PWM_MAX == 0U) { return 0U; }
-    uint32_t scaled = (uint32_t)b->duty * 1000U / PAPR_PWM_MAX;
-    return (uint16_t)scaled;
+    return (b == NULL) ? 0U : papr_l6235_demand_permille(&b->driver);
+}
+
+uint16_t papr_blower_rpm(const papr_blower_t *b)
+{
+    return (b == NULL) ? 0U : papr_l6235_rpm(&b->driver);
+}
+
+bool papr_blower_driver_fault(const papr_blower_t *b)
+{
+    return (b != NULL) && papr_l6235_has_fault(&b->driver);
 }

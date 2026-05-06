@@ -5,23 +5,43 @@
 
 /* Hardware abstraction layer. Implement these symbols once per target MCU
  * (STM32, NXP Kinetis, NRF52, RP2040, ESP32 ...). The controller core is
- * portable and never touches a peripheral register directly. */
+ * portable and never touches a peripheral register directly.
+ *
+ * Revision 2: the blower is driven by an ST L6235 three-phase DMOS driver.
+ * The MCU no longer generates the bridge PWM itself; instead it controls the
+ * L6235 through the following signals:
+ *
+ *   VREF  — analog (DAC or filtered PWM): peak phase current setpoint
+ *   EN    — GPIO out, active high: enables the output bridge
+ *   FWD   — GPIO out: rotation direction (forward = blower-out)
+ *   BRAKE — GPIO out, active LOW: shorts low-side FETs when asserted
+ *   DIAG  — GPIO in, open-drain (low = fault, OCD or thermal shutdown)
+ *   TACHO — GPIO in, captured by a timer (pulse train proportional to RPM)
+ */
 
 papr_status_t papr_hal_init(void);
 
 /* Monotonic millisecond tick. Must be wrap-safe over 32 bits. */
 uint32_t papr_hal_now_ms(void);
 
-/* PWM driver for the brushless blower. duty is 0..PAPR_PWM_MAX. */
-papr_status_t papr_hal_blower_set_duty(uint16_t duty);
-papr_status_t papr_hal_blower_enable(bool enable);
+/* L6235 actuation. */
+papr_status_t papr_hal_l6235_set_vref(uint16_t code);   /* 0..PAPR_L6235_VREF_DAC_MAX */
+papr_status_t papr_hal_l6235_set_enable(bool enable);
+papr_status_t papr_hal_l6235_set_forward(bool forward);
+papr_status_t papr_hal_l6235_set_brake(bool brake_engaged);
+
+/* L6235 status. diag_active() returns true when DIAG is asserted (= LOW on
+ * the open-drain pin) and the condition has persisted past the debounce
+ * window. tacho_rpm() returns the motor speed measured from the TACHO
+ * pulse train, normalised to PAPR_L6235_TACHO_PPR. */
+bool          papr_hal_l6235_diag_active(void);
+papr_status_t papr_hal_l6235_read_tacho_rpm(uint16_t *out);
 
 /* Sensor reads. Return PAPR_ERR_HW on bus failure. */
 papr_status_t papr_hal_read_flow_lpm(uint16_t *out);
 papr_status_t papr_hal_read_pressure_pa(uint16_t *out);
 papr_status_t papr_hal_read_battery_mv(uint16_t *out);
 papr_status_t papr_hal_read_battery_ma(uint16_t *out);
-papr_status_t papr_hal_read_motor_rpm(uint16_t *out);
 papr_status_t papr_hal_read_temperature_c10(int16_t *out);
 
 /* User interface: button, LEDs, buzzer. */

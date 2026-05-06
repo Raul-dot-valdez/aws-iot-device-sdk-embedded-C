@@ -69,9 +69,11 @@ static void evaluate_safety(papr_controller_t *c, uint32_t now_ms)
         papr_alarms_clear(&c->alarms, PAPR_ALARM_OVERTEMP);
     }
 
-    /* Motor stalled: commanded duty > 50 % but RPM nearly zero. */
-    if (papr_blower_duty_permille(&c->blower) > 500U &&
-        c->sensors.rpm_valid && c->sensors.motor_rpm < 500U)
+    /* Motor fault: latched DIAG from the L6235 (overcurrent or thermal
+     * shutdown), or commanded current > 50 % of IMAX with RPM near zero. */
+    if (papr_blower_driver_fault(&c->blower) ||
+        (papr_blower_duty_permille(&c->blower) > 500U &&
+         papr_blower_rpm(&c->blower) < 500U))
     {
         papr_alarms_set(&c->alarms, PAPR_ALARM_MOTOR_FAULT);
     }
@@ -236,6 +238,6 @@ void papr_controller_get_telemetry(const papr_controller_t *c,
     out->temperature_c10 = c->sensors.temperature_c10;
     out->battery_mv      = c->battery.voltage_mv;
     out->battery_ma      = c->battery.current_ma;
-    out->motor_rpm       = c->sensors.motor_rpm;
+    out->motor_rpm       = papr_blower_rpm(&c->blower);
     out->duty_permille   = papr_blower_duty_permille(&c->blower);
 }

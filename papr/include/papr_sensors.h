@@ -3,16 +3,17 @@
 
 #include "papr_types.h"
 
+/* Environmental sensors only. Motor speed is sourced from the L6235 TACHO
+ * pin and lives inside the blower / driver layer. */
+
 typedef struct
 {
     uint16_t flow_lpm;
     uint16_t pressure_pa;
     int16_t  temperature_c10;
-    uint16_t motor_rpm;
     bool     flow_valid;
     bool     pressure_valid;
     bool     temperature_valid;
-    bool     rpm_valid;
 } papr_sensors_t;
 
 papr_status_t papr_sensors_init(papr_sensors_t *s);
