@@ -99,12 +99,26 @@
 #define PAPR_BUZZER_TIMER            TIMER2
 #define PAPR_BUZZER_TIMER_CH         TIMER_CH_0
 
-/* ---- Optional UART for telemetry / IoT bridge ---------------------------- */
+/* ---- GD32VW553-UNIFI-EMH7 BLE module ------------------------------------- */
 
+/* USART0 carries the framed binary protocol to and from the BLE module. */
 #define PAPR_PIN_UART_TX_PORT        GPIOA
 #define PAPR_PIN_UART_TX_PIN         GPIO_PIN_9
 #define PAPR_PIN_UART_RX_PORT        GPIOA
 #define PAPR_PIN_UART_RX_PIN         GPIO_PIN_10
 #define PAPR_UART_PERIPH             USART0
+
+/* Module reset (active LOW). Pulled high externally; MCU drives low to
+ * reboot the radio. */
+#define PAPR_PIN_BLE_RESET_PORT      GPIOA
+#define PAPR_PIN_BLE_RESET_PIN       GPIO_PIN_11
+
+/* Host-wake input from the module (high when the module has data to deliver
+ * outside of the normal UART RX path; informational here). */
+#define PAPR_PIN_BLE_WAKE_PORT       GPIOA
+#define PAPR_PIN_BLE_WAKE_PIN        GPIO_PIN_12
+
+/* GDY1124 absolute pressure sensor shares I2C0 with the SDP810
+ * (different addresses). No new pins required. */
 
 #endif /* PAPR_PINMAP_GD32E517RE_H */

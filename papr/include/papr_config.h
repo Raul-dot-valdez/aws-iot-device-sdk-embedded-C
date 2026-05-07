@@ -150,6 +150,32 @@
 #define PAPR_SDP810_RESTART_PERIOD_MS   60000U
 #endif
 
+/* ---- GD32VW553-UNIFI-EMH7 BLE module --------------------------------------
+ * UART-attached pre-certified module hosting GigaDevice's GD32VW553 wireless
+ * SoC (RISC-V, BLE 5.2). The host MCU exchanges framed binary packets with
+ * the module, which proxies them as GATT notifications / writes to the
+ * paired mobile app. */
+
+/* UART baud rate (module default 115200 8N1). */
+#ifndef PAPR_BLE_UART_BAUD
+#define PAPR_BLE_UART_BAUD              115200U
+#endif
+
+/* Telemetry transmission cadence over BLE. */
+#ifndef PAPR_BLE_TELEM_PERIOD_MS
+#define PAPR_BLE_TELEM_PERIOD_MS        500U
+#endif
+
+/* Largest payload a single frame may carry. */
+#ifndef PAPR_BLE_MAX_PAYLOAD
+#define PAPR_BLE_MAX_PAYLOAD            64U
+#endif
+
+/* Frame-sync bytes. Two-byte preamble keeps the module's UART from
+ * mistakenly accepting log noise as a command. */
+#define PAPR_BLE_SYNC0                  0xAAU
+#define PAPR_BLE_SYNC1                  0x55U
+
 /* Watchdog kick interval. Must be shorter than the hardware watchdog window. */
 #ifndef PAPR_WDT_KICK_MS
 #define PAPR_WDT_KICK_MS                100U

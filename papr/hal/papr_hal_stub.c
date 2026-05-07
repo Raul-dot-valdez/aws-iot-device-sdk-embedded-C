@@ -1,4 +1,5 @@
 #include "papr_config.h"
+#include "papr_gdy1124.h"
 #include "papr_hal.h"
 #include "papr_sdp810.h"
 
@@ -110,50 +111,138 @@ static bool     s_sdp_started;
 static int16_t  s_sdp_raw_dp;
 static int16_t  s_sdp_raw_temp;
 
+/* Per-slave register pointer. The GDY1124 transcript is "write register
+ * address, then read N bytes" so we remember the last write to dispatch the
+ * next read. Bench-validated BMP280-family calibration / raw values yield
+ * ≈ 25 °C and ≈ 100 653 Pa, which keeps the host build's telemetry sane. */
+static uint8_t s_gdy_reg_ptr;
+static const uint8_t s_gdy_calib[PAPR_GDY1124_CALIB_LEN] = {
+    /* T1=27504, T2=26435, T3=-1000 */
+    0x70U, 0x6BU, 0x43U, 0x67U, 0x18U, 0xFCU,
+    /* P1=36477, P2=-10685, P3=3024, P4=2855, P5=140, P6=-7,
+     * P7=15500, P8=-14600, P9=6000 */
+    0x7DU, 0x8EU, 0x43U, 0xD6U, 0xD0U, 0x0BU, 0x27U, 0x0BU, 0x8CU, 0x00U,
+    0xF9U, 0xFFU, 0x8CU, 0x3CU, 0xF8U, 0xC6U, 0x70U, 0x17U
+};
+static const uint8_t s_gdy_raw[6] = {
+    /* adc_P = 415148  →  0x6585C  packed in [19..0] of three bytes      */
+    0x65U, 0x85U, 0xC0U,
+    /* adc_T = 519888  →  0x7EE34                                        */
+    0x7EU, 0xE3U, 0x40U
+};
+
 papr_status_t papr_hal_i2c_write(uint8_t addr7, const uint8_t *data, size_t len)
 {
     if (data == NULL || len == 0U) { return PAPR_ERR_PARAM; }
-    if (addr7 != PAPR_SDP810_I2C_ADDR && addr7 != 0x00U) { return PAPR_ERR_HW; }
 
-    /* Treat any 2-byte 0x36 0x1E as "start continuous DP w/ averaging" and
-     * 0x3F 0xF9 as "stop". Update the simulated raw values from the latest
-     * blower demand so the rest of the firmware sees consistent telemetry. */
-    if (len >= 2U && data[0] == 0x36U && data[1] == 0x1EU)
+    if (addr7 == PAPR_SDP810_I2C_ADDR || addr7 == 0x00U)
     {
-        s_sdp_started  = true;
-        s_sdp_raw_temp = (int16_t)(25 * 200); /* 25.00 °C */
+        /* SDP810 commands. */
+        if (len >= 2U && data[0] == 0x36U && data[1] == 0x1EU)
+        {
+            s_sdp_started  = true;
+            s_sdp_raw_temp = (int16_t)(25 * 200);
+        }
+        else if (len >= 2U && data[0] == 0x3FU && data[1] == 0xF9U)
+        {
+            s_sdp_started = false;
+        }
+        int32_t pa = (int32_t)(((uint32_t)s_vref_code * 200U) /
+                               PAPR_L6235_VREF_DAC_MAX);
+        s_sdp_raw_dp = (int16_t)(pa * (int32_t)PAPR_SDP810_SCALE);
+        return PAPR_OK;
     }
-    else if (len >= 2U && data[0] == 0x3FU && data[1] == 0xF9U)
+
+    if (addr7 == PAPR_GDY1124_I2C_ADDR)
     {
-        s_sdp_started = false;
+        /* First byte is always the register pointer; subsequent bytes are
+         * register writes which we silently accept. */
+        s_gdy_reg_ptr = data[0];
+        return PAPR_OK;
     }
-    int32_t pa = (int32_t)(((uint32_t)s_vref_code * 200U) /
-                           PAPR_L6235_VREF_DAC_MAX);
-    s_sdp_raw_dp = (int16_t)(pa * (int32_t)PAPR_SDP810_SCALE);
-    return PAPR_OK;
+
+    return PAPR_ERR_HW;
 }
 
 papr_status_t papr_hal_i2c_read(uint8_t addr7, uint8_t *data, size_t len)
 {
     if (data == NULL) { return PAPR_ERR_PARAM; }
-    if (addr7 != PAPR_SDP810_I2C_ADDR) { return PAPR_ERR_HW; }
-    if (!s_sdp_started || len < 9U)    { return PAPR_ERR_HW; }
 
-    uint8_t frame[9];
-    frame[0] = (uint8_t)((uint16_t)s_sdp_raw_dp >> 8);
-    frame[1] = (uint8_t)((uint16_t)s_sdp_raw_dp & 0xFFU);
-    frame[2] = papr_sdp810_crc8(&frame[0], 2U);
-    frame[3] = (uint8_t)((uint16_t)s_sdp_raw_temp >> 8);
-    frame[4] = (uint8_t)((uint16_t)s_sdp_raw_temp & 0xFFU);
-    frame[5] = papr_sdp810_crc8(&frame[3], 2U);
-    frame[6] = (uint8_t)((uint16_t)PAPR_SDP810_SCALE >> 8);
-    frame[7] = (uint8_t)((uint16_t)PAPR_SDP810_SCALE & 0xFFU);
-    frame[8] = papr_sdp810_crc8(&frame[6], 2U);
+    if (addr7 == PAPR_SDP810_I2C_ADDR)
+    {
+        if (!s_sdp_started || len < 9U) { return PAPR_ERR_HW; }
+        uint8_t frame[9];
+        frame[0] = (uint8_t)((uint16_t)s_sdp_raw_dp >> 8);
+        frame[1] = (uint8_t)((uint16_t)s_sdp_raw_dp & 0xFFU);
+        frame[2] = papr_sdp810_crc8(&frame[0], 2U);
+        frame[3] = (uint8_t)((uint16_t)s_sdp_raw_temp >> 8);
+        frame[4] = (uint8_t)((uint16_t)s_sdp_raw_temp & 0xFFU);
+        frame[5] = papr_sdp810_crc8(&frame[3], 2U);
+        frame[6] = (uint8_t)((uint16_t)PAPR_SDP810_SCALE >> 8);
+        frame[7] = (uint8_t)((uint16_t)PAPR_SDP810_SCALE & 0xFFU);
+        frame[8] = papr_sdp810_crc8(&frame[6], 2U);
+        memcpy(data, frame, 9U);
+        if (len > 9U) { memset(data + 9U, 0, len - 9U); }
+        return PAPR_OK;
+    }
 
-    memcpy(data, frame, 9U);
-    if (len > 9U) { memset(data + 9U, 0, len - 9U); }
+    if (addr7 == PAPR_GDY1124_I2C_ADDR)
+    {
+        if (s_gdy_reg_ptr == PAPR_GDY1124_REG_CHIP_ID && len >= 1U)
+        {
+            data[0] = PAPR_GDY1124_CHIP_ID;
+            if (len > 1U) { memset(data + 1, 0, len - 1U); }
+            return PAPR_OK;
+        }
+        if (s_gdy_reg_ptr == PAPR_GDY1124_REG_CALIB_BASE &&
+            len >= PAPR_GDY1124_CALIB_LEN)
+        {
+            memcpy(data, s_gdy_calib, PAPR_GDY1124_CALIB_LEN);
+            if (len > PAPR_GDY1124_CALIB_LEN)
+            {
+                memset(data + PAPR_GDY1124_CALIB_LEN, 0,
+                       len - PAPR_GDY1124_CALIB_LEN);
+            }
+            return PAPR_OK;
+        }
+        if (s_gdy_reg_ptr == PAPR_GDY1124_REG_PRESS_MSB && len >= 6U)
+        {
+            memcpy(data, s_gdy_raw, 6U);
+            if (len > 6U) { memset(data + 6, 0, len - 6U); }
+            return PAPR_OK;
+        }
+        memset(data, 0, len);
+        return PAPR_OK;
+    }
+
+    return PAPR_ERR_HW;
+}
+
+/* ---- UART / BLE control stubs --------------------------------------------
+ * The host build does not actually attach a BLE module; UART writes are
+ * dropped and the receive buffer is always empty. This keeps the firmware
+ * exercising the BLE poll path without simulating phone-side traffic. */
+
+papr_status_t papr_hal_uart_write(const uint8_t *data, size_t len)
+{
+    (void)data;
+    (void)len;
     return PAPR_OK;
 }
+
+bool papr_hal_uart_read_byte(uint8_t *out)
+{
+    (void)out;
+    return false;
+}
+
+papr_status_t papr_hal_ble_set_reset(bool asserted)
+{
+    (void)asserted;
+    return PAPR_OK;
+}
+
+bool papr_hal_ble_host_wake(void) { return false; }
 
 papr_status_t papr_hal_read_battery_mv(uint16_t *out)
 {

@@ -56,6 +56,20 @@ papr_status_t papr_hal_i2c_write(uint8_t addr7,
 papr_status_t papr_hal_i2c_read(uint8_t addr7,
                                 uint8_t *data, size_t len);
 
+/* UART transport for the GD32VW553-UNIFI-EMH7 BLE module. The HAL owns a
+ * small ring buffer fed by the RX interrupt; the portable papr_ble module
+ * polls it via papr_hal_uart_read_byte(). Writes are synchronous-blocking
+ * with a built-in timeout suitable for telemetry packets up to ~256 bytes. */
+papr_status_t papr_hal_uart_write(const uint8_t *data, size_t len);
+
+/* Returns true and stores the next byte in *out if one is available.
+ * Returns false if the RX buffer is empty. Non-blocking. */
+bool papr_hal_uart_read_byte(uint8_t *out);
+
+/* BLE module control lines (active-low reset, host-wake input). */
+papr_status_t papr_hal_ble_set_reset(bool asserted);
+bool          papr_hal_ble_host_wake(void);
+
 /* User interface: button, LEDs, buzzer. */
 bool papr_hal_button_power_pressed(void);
 bool papr_hal_button_level_pressed(void);

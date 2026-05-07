@@ -105,8 +105,65 @@ papr_status_t papr_controller_init(papr_controller_t *c)
     if (s != PAPR_OK) { return s; }
     papr_alarms_init(&c->alarms);
 
+    /* BLE bring-up is best-effort; an absent module must not block the
+     * supervisor from running locally. */
+    (void)papr_ble_init(&c->ble);
+
+    c->rc_power_on_pending    = false;
+    c->rc_power_off_pending   = false;
+    c->rc_level_pending       = false;
+    c->rc_reset_fault_pending = false;
+    c->rc_mute_pending_ms     = 0U;
+
     enter_state(c, PAPR_STATE_INIT);
     return PAPR_OK;
+}
+
+static void apply_remote_requests(papr_controller_t *c, uint32_t now)
+{
+    if (c->rc_mute_pending_ms != 0U)
+    {
+        papr_alarms_mute(&c->alarms, now, c->rc_mute_pending_ms);
+        c->rc_mute_pending_ms = 0U;
+    }
+
+    if (c->rc_reset_fault_pending)
+    {
+        c->rc_reset_fault_pending = false;
+        if (c->state == PAPR_STATE_FAULT)
+        {
+            c->alarms.active_mask  = 0U;
+            c->alarms.latched_mask = 0U;
+            enter_state(c, PAPR_STATE_INIT);
+        }
+    }
+
+    if (c->rc_level_pending)
+    {
+        c->rc_level_pending = false;
+        c->level            = c->rc_level_request;
+        apply_level(c);
+    }
+
+    if (c->rc_power_on_pending)
+    {
+        c->rc_power_on_pending = false;
+        if (c->state == PAPR_STATE_STANDBY)
+        {
+            apply_level(c);
+            (void)papr_blower_start(&c->blower);
+            enter_state(c, PAPR_STATE_RUNNING);
+        }
+    }
+
+    if (c->rc_power_off_pending)
+    {
+        c->rc_power_off_pending = false;
+        if (c->state == PAPR_STATE_RUNNING || c->state == PAPR_STATE_ALARM)
+        {
+            enter_state(c, PAPR_STATE_SHUTDOWN);
+        }
+    }
 }
 
 papr_status_t papr_controller_step(papr_controller_t *c)
@@ -127,6 +184,11 @@ papr_status_t papr_controller_step(papr_controller_t *c)
         (void)papr_battery_update(&c->battery);
         c->last_sensor_ms = now;
     }
+
+    /* Service the wireless link first so any commands queued by the mobile
+     * app are honoured in the same supervisor tick. */
+    (void)papr_ble_poll(&c->ble, c);
+    apply_remote_requests(c, now);
 
     switch (c->state)
     {
@@ -233,11 +295,53 @@ void papr_controller_get_telemetry(const papr_controller_t *c,
                                    papr_telemetry_t *out)
 {
     if (c == NULL || out == NULL) { return; }
-    out->flow_lpm        = c->sensors.flow_lpm;
-    out->pressure_pa     = c->sensors.pressure_pa;
-    out->temperature_c10 = c->sensors.temperature_c10;
-    out->battery_mv      = c->battery.voltage_mv;
-    out->battery_ma      = c->battery.current_ma;
-    out->motor_rpm       = papr_blower_rpm(&c->blower);
-    out->duty_permille   = papr_blower_duty_permille(&c->blower);
+    out->flow_lpm             = c->sensors.flow_lpm;
+    out->pressure_pa          = c->sensors.pressure_pa;
+    out->absolute_pressure_pa = c->sensors.absolute_pressure_pa;
+    out->temperature_c10      = c->sensors.temperature_c10;
+    out->battery_mv           = c->battery.voltage_mv;
+    out->battery_ma           = c->battery.current_ma;
+    out->battery_soc_percent  = c->battery.soc_percent;
+    out->motor_rpm            = papr_blower_rpm(&c->blower);
+    out->duty_permille        = papr_blower_duty_permille(&c->blower);
+}
+
+void papr_controller_snapshot(const papr_controller_t *c,
+                              papr_telemetry_t *out_t,
+                              uint8_t *out_state,
+                              uint8_t *out_level,
+                              uint32_t *out_alarms)
+{
+    if (c == NULL) { return; }
+    if (out_t)      { papr_controller_get_telemetry(c, out_t); }
+    if (out_state)  { *out_state  = (uint8_t)c->state; }
+    if (out_level)  { *out_level  = (uint8_t)c->level; }
+    if (out_alarms) { *out_alarms = c->alarms.active_mask; }
+}
+
+void papr_controller_remote_power(papr_controller_t *c, bool on)
+{
+    if (c == NULL) { return; }
+    if (on) { c->rc_power_on_pending  = true; c->rc_power_off_pending = false; }
+    else    { c->rc_power_off_pending = true; c->rc_power_on_pending  = false; }
+}
+
+void papr_controller_remote_set_level(papr_controller_t *c,
+                                      papr_flow_level_t level)
+{
+    if (c == NULL || (unsigned)level >= (unsigned)PAPR_LEVEL_COUNT) { return; }
+    c->rc_level_request = level;
+    c->rc_level_pending = true;
+}
+
+void papr_controller_remote_mute(papr_controller_t *c, uint32_t duration_ms)
+{
+    if (c == NULL || duration_ms == 0U) { return; }
+    c->rc_mute_pending_ms = duration_ms;
+}
+
+void papr_controller_remote_reset_fault(papr_controller_t *c)
+{
+    if (c == NULL) { return; }
+    c->rc_reset_fault_pending = true;
 }

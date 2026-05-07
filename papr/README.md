@@ -18,6 +18,17 @@ Reference firmware for a Powered Air-Purifying Respirator (PAPR) running on
   SDP810 driver with full Sensirion CRC-8 framing; the HAL now exposes raw
   I²C primitives instead of a high-level pressure call. `pressure_pa` is
   now `int16_t` since the chip reports signed differential pressure.
+- **Revision 5** — adds two GigaDevice peripherals:
+  - **GDY1124** absolute-pressure sensor on the same I²C bus (address 0x76).
+    Provides ambient barometric reference for altitude-compensated airflow
+    estimation; reading exposed via `papr_telemetry_t::absolute_pressure_pa`.
+  - **GD32VW553-UNIFI-EMH7** Bluetooth LE module on USART0. A custom framed
+    binary protocol (preamble `AA 55`, length, command, payload, CRC-8)
+    lets a paired mobile app read live telemetry, change the flow level,
+    power the unit on/off, mute alarms, and clear faults.
+
+  All revision-1 modules and headers remain in place; revisions 2-5 only
+  added or extended functionality.
 
 ## Layout
 
@@ -97,6 +108,14 @@ for the remaining 13 of the 64 LQFP positions.
   9-byte frames, validates Sensirion CRC-8 over each (pressure, temperature,
   scale-factor) word, and applies the chip-reported scale factor (60 LSB/Pa
   for the 500 Pa range).
+- `papr_gdy1124` — portable driver for the GigaDevice GDY1124 absolute
+  pressure sensor. Reads chip-ID, the 24-byte calibration block, and 6-byte
+  raw pressure/temperature samples; applies the standard 32/64-bit fixed-
+  point compensation. Output: pressure in Pa, temperature in 0.1 °C.
+- `papr_ble` — portable driver for the GD32VW553-UNIFI-EMH7 BLE module.
+  Owns a TX serializer and a state-machine RX parser; dispatches commands
+  to `papr_controller_remote_*` hooks; sends periodic telemetry frames and
+  edge-triggered events for state, level, and alarm-mask changes.
 - `papr_battery`, `papr_sensors`, `papr_alarms` — battery state, environmental
   sensors, alarm latching/rendering.
 - `papr_hal` — vendor-agnostic hardware contract; only exposes raw I²C
@@ -116,6 +135,68 @@ The "+" port (high-pressure tube) is plumbed across the device of interest
 (filter inlet / mask-side breathing circuit); the "−" port goes to ambient
 or the reference branch. I²C address is fixed at `0x25` for the SDP810 and
 defined as `PAPR_SDP810_I2C_ADDR` in `papr_config.h`.
+
+## GDY1124 absolute pressure sensor (rev 5)
+
+The GigaDevice GDY1124 sits on the same I²C bus as the SDP810 at address
+`0x76` (`PAPR_GDY1124_I2C_ADDR`). The driver:
+
+1. Verifies the chip-ID register on init.
+2. Reads the 24-byte calibration block (`T1..T3`, `P1..P9`).
+3. Configures `CTRL_MEAS` for normal mode, ×4 temperature oversampling,
+   ×16 pressure oversampling, and `CONFIG` for an IIR coefficient of 4
+   with a 250 ms standby.
+4. Per cycle, reads 6 raw bytes (24-bit pressure + 24-bit temperature)
+   and applies the standard 64-bit fixed-point compensation algorithm.
+
+Verify the chip-ID byte and register layout against the official GDY1124
+datasheet — the constants are isolated in `papr_gdy1124.h` so no source
+changes are needed if your part has a different ID or register map.
+
+## BLE wireless control (rev 5)
+
+The GD32VW553-UNIFI-EMH7 module sits on USART0 (`PA9` TX / `PA10` RX,
+115200 8N1). Two extra GPIOs control the module:
+
+| Signal       | GD32E517 pin | Notes                           |
+| ------------ | ------------ | ------------------------------- |
+| BLE_RESET_N  | PA11         | Active-low reset, push-pull     |
+| BLE_HOST_WAKE| PA12         | Module → MCU wake notification  |
+
+The host MCU exchanges length-prefixed binary frames with the module:
+
+```
++------+------+------+------+--------------+------+
+| 0xAA | 0x55 | LEN  | CMD  | PAYLOAD (LEN)| CRC8 |
++------+------+------+------+--------------+------+
+```
+
+CRC-8 is the same Sensirion polynomial (`0x31`, init `0xFF`) we already
+use for the SDP810 — one helper function services both protocols.
+
+Mobile → device commands:
+
+| Code | Name           | Payload                               |
+| ---- | -------------- | ------------------------------------- |
+| 0x01 | SET_LEVEL      | `[u8 level]` (0=lo, 1=med, 2=hi)      |
+| 0x02 | POWER_ON       | empty                                 |
+| 0x03 | POWER_OFF      | empty                                 |
+| 0x04 | MUTE_ALARM     | `[u16 LE seconds]`                    |
+| 0x05 | RESET_FAULT    | empty                                 |
+| 0x06 | GET_VERSION    | empty                                 |
+| 0x07 | GET_TELEMETRY  | empty                                 |
+
+Device → mobile notifications:
+
+| Code | Name           | Payload                               |
+| ---- | -------------- | ------------------------------------- |
+| 0x80 | TELEMETRY      | packed 28-byte telemetry struct       |
+| 0x81 | ACK            | `[u8 cmd]`                            |
+| 0x82 | NACK           | `[u8 cmd, u8 reason]`                 |
+| 0x83 | EVENT          | `[u8 event_type, …]`                  |
+
+Telemetry is broadcast every `PAPR_BLE_TELEM_PERIOD_MS` (500 ms by
+default) and on every state, level, or alarm-mask change.
 
 ## Safety notes
 

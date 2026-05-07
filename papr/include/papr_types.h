@@ -49,13 +49,15 @@ typedef enum
 
 typedef struct
 {
-    uint16_t flow_lpm;          /* Measured airflow, litres per minute */
-    int16_t  pressure_pa;       /* Differential pressure across filter, signed */
-    int16_t  temperature_c10;   /* Motor housing temperature, 0.1 °C */
-    uint16_t battery_mv;        /* Pack voltage, millivolts */
-    uint16_t battery_ma;        /* Pack discharge current, milliamps */
-    uint16_t motor_rpm;         /* Brushless motor speed */
-    uint16_t duty_permille;     /* Current PWM duty in 0.1 % */
+    uint16_t flow_lpm;            /* Measured airflow, litres per minute */
+    int16_t  pressure_pa;         /* Differential pressure across filter (SDP810) */
+    uint32_t absolute_pressure_pa;/* Ambient absolute pressure (GDY1124)  */
+    int16_t  temperature_c10;     /* Motor housing temperature, 0.1 °C */
+    uint16_t battery_mv;          /* Pack voltage, millivolts            */
+    uint16_t battery_ma;          /* Pack discharge current, milliamps   */
+    uint8_t  battery_soc_percent; /* State of charge, 0..100             */
+    uint16_t motor_rpm;           /* Brushless motor speed               */
+    uint16_t duty_permille;       /* Current PWM duty in 0.1 %           */
 } papr_telemetry_t;
 
 #endif /* PAPR_TYPES_H */

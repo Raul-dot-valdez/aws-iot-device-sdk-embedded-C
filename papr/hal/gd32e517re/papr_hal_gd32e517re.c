@@ -516,6 +516,112 @@ papr_status_t papr_hal_buzzer_set(bool on, uint16_t freq_hz)
 }
 
 /* ------------------------------------------------------------------------- */
+/* USART0 transport for the GD32VW553 BLE module                             */
+/* ------------------------------------------------------------------------- */
+
+#define BLE_RX_RING_LEN  256U
+static volatile uint8_t  s_ble_rx_buf[BLE_RX_RING_LEN];
+static volatile uint16_t s_ble_rx_head;     /* written by ISR */
+static volatile uint16_t s_ble_rx_tail;     /* written by main */
+
+static void ble_uart_init(void)
+{
+    rcu_periph_clock_enable(RCU_USART0);
+
+    gpio_init(PAPR_PIN_UART_TX_PORT, GPIO_MODE_AF_PP, GPIO_OSPEED_50MHZ,
+              PAPR_PIN_UART_TX_PIN);
+    gpio_init(PAPR_PIN_UART_RX_PORT, GPIO_MODE_IN_FLOATING, GPIO_OSPEED_50MHZ,
+              PAPR_PIN_UART_RX_PIN);
+
+    /* BLE module RESET_N: drive low at boot, release after init. */
+    gpio_init(PAPR_PIN_BLE_RESET_PORT, GPIO_MODE_OUT_PP, GPIO_OSPEED_50MHZ,
+              PAPR_PIN_BLE_RESET_PIN);
+    gpio_bit_reset(PAPR_PIN_BLE_RESET_PORT, PAPR_PIN_BLE_RESET_PIN);
+
+    /* HOST_WAKE input. */
+    gpio_init(PAPR_PIN_BLE_WAKE_PORT, GPIO_MODE_IN_FLOATING, GPIO_OSPEED_50MHZ,
+              PAPR_PIN_BLE_WAKE_PIN);
+
+    usart_deinit(PAPR_UART_PERIPH);
+    usart_baudrate_set(PAPR_UART_PERIPH, PAPR_BLE_UART_BAUD);
+    usart_word_length_set(PAPR_UART_PERIPH, USART_WL_8BIT);
+    usart_stop_bit_set(PAPR_UART_PERIPH, USART_STB_1BIT);
+    usart_parity_config(PAPR_UART_PERIPH, USART_PM_NONE);
+    usart_hardware_flow_rts_config(PAPR_UART_PERIPH, USART_RTS_DISABLE);
+    usart_hardware_flow_cts_config(PAPR_UART_PERIPH, USART_CTS_DISABLE);
+    usart_receive_config(PAPR_UART_PERIPH, USART_RECEIVE_ENABLE);
+    usart_transmit_config(PAPR_UART_PERIPH, USART_TRANSMIT_ENABLE);
+    usart_enable(PAPR_UART_PERIPH);
+
+    /* RX-not-empty interrupt fills the ring buffer. */
+    nvic_irq_enable(USART0_IRQn, 2U, 0U);
+    usart_interrupt_enable(PAPR_UART_PERIPH, USART_INT_RBNE);
+
+    s_ble_rx_head = 0U;
+    s_ble_rx_tail = 0U;
+}
+
+void USART0_IRQHandler(void)
+{
+    if (usart_interrupt_flag_get(PAPR_UART_PERIPH, USART_INT_FLAG_RBNE) != RESET)
+    {
+        uint8_t b = (uint8_t)usart_data_receive(PAPR_UART_PERIPH);
+        uint16_t next = (uint16_t)((s_ble_rx_head + 1U) % BLE_RX_RING_LEN);
+        if (next != s_ble_rx_tail)
+        {
+            s_ble_rx_buf[s_ble_rx_head] = b;
+            s_ble_rx_head = next;
+        }
+        /* If full, drop the byte. The protocol parser will resync on the
+         * 0xAA 0x55 preamble of the next intact frame. */
+    }
+    /* Clear ORE if it has set so reception keeps running. */
+    if (usart_flag_get(PAPR_UART_PERIPH, USART_FLAG_ORERR) != RESET)
+    {
+        usart_flag_clear(PAPR_UART_PERIPH, USART_FLAG_ORERR);
+        (void)usart_data_receive(PAPR_UART_PERIPH);
+    }
+}
+
+papr_status_t papr_hal_uart_write(const uint8_t *data, size_t len)
+{
+    if (data == NULL || len == 0U) { return PAPR_ERR_PARAM; }
+    for (size_t i = 0U; i < len; ++i)
+    {
+        uint32_t timeout = 100000U;
+        while (usart_flag_get(PAPR_UART_PERIPH, USART_FLAG_TBE) == RESET &&
+               --timeout) { }
+        if (timeout == 0U) { return PAPR_ERR_TIMEOUT; }
+        usart_data_transmit(PAPR_UART_PERIPH, (uint16_t)data[i]);
+    }
+    uint32_t timeout = 100000U;
+    while (usart_flag_get(PAPR_UART_PERIPH, USART_FLAG_TC) == RESET &&
+           --timeout) { }
+    return (timeout == 0U) ? PAPR_ERR_TIMEOUT : PAPR_OK;
+}
+
+bool papr_hal_uart_read_byte(uint8_t *out)
+{
+    if (out == NULL || s_ble_rx_head == s_ble_rx_tail) { return false; }
+    *out = s_ble_rx_buf[s_ble_rx_tail];
+    s_ble_rx_tail = (uint16_t)((s_ble_rx_tail + 1U) % BLE_RX_RING_LEN);
+    return true;
+}
+
+papr_status_t papr_hal_ble_set_reset(bool asserted)
+{
+    if (asserted) { gpio_bit_reset(PAPR_PIN_BLE_RESET_PORT, PAPR_PIN_BLE_RESET_PIN); }
+    else          { gpio_bit_set(PAPR_PIN_BLE_RESET_PORT,   PAPR_PIN_BLE_RESET_PIN); }
+    return PAPR_OK;
+}
+
+bool papr_hal_ble_host_wake(void)
+{
+    return gpio_input_bit_get(PAPR_PIN_BLE_WAKE_PORT,
+                              PAPR_PIN_BLE_WAKE_PIN) != RESET;
+}
+
+/* ------------------------------------------------------------------------- */
 /* Watchdog                                                                  */
 /* ------------------------------------------------------------------------- */
 
@@ -552,6 +658,7 @@ papr_status_t papr_hal_init(void)
     adc_init_papr();
     i2c_bus_init();
     buzzer_init();
+    ble_uart_init();
     wdt_init();
     return PAPR_OK;
 }
