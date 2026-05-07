@@ -1,0 +1,110 @@
+#ifndef PAPR_PINMAP_GD32E517RE_H
+#define PAPR_PINMAP_GD32E517RE_H
+
+/* Pin map for the GigaDevice GD32E517RE (Cortex-M33, LQFP64, 51 GPIOs).
+ *
+ * Reserved pins (not available as GPIO on this package):
+ *   VDD/VSS                     pwr
+ *   VDDA/VSSA                   analog pwr
+ *   VBAT                        backup pwr
+ *   NRST                        reset
+ *   PA13 / PA14                 SWDIO / SWCLK
+ *   PD0 / PD1                   HXTAL (25 MHz crystal)
+ *   PC14 / PC15                 LXTAL (32.768 kHz crystal)
+ *   BOOT0                       boot select
+ *
+ * Everything below is wired to a peripheral. Pin numbers are LQFP64 package
+ * positions; refer to the GD32E517 datasheet pinout for exact mapping. */
+
+#include "gd32e51x.h"
+
+/* ---- L6235 brushless DC driver -------------------------------------------- */
+
+/* DAC channel 0 → L6235 VREF (peak-current setpoint).                       */
+#define PAPR_PIN_L6235_VREF_PORT     GPIOA
+#define PAPR_PIN_L6235_VREF_PIN      GPIO_PIN_4
+#define PAPR_DAC_CHANNEL             DAC_OUT0
+
+/* GPIO outputs to L6235 logic inputs.                                       */
+#define PAPR_PIN_L6235_EN_PORT       GPIOB
+#define PAPR_PIN_L6235_EN_PIN        GPIO_PIN_12
+
+#define PAPR_PIN_L6235_FWD_PORT      GPIOB
+#define PAPR_PIN_L6235_FWD_PIN       GPIO_PIN_13
+
+#define PAPR_PIN_L6235_BRAKE_PORT    GPIOB
+#define PAPR_PIN_L6235_BRAKE_PIN     GPIO_PIN_14
+
+/* DIAG: open-drain from L6235 with external pull-up; EXTI on falling edge.  */
+#define PAPR_PIN_L6235_DIAG_PORT     GPIOB
+#define PAPR_PIN_L6235_DIAG_PIN      GPIO_PIN_15
+#define PAPR_PIN_L6235_DIAG_EXTI     EXTI_15
+#define PAPR_PIN_L6235_DIAG_EXTI_SRC EXTI_SOURCE_PIN15
+#define PAPR_PIN_L6235_DIAG_EXTI_PORT_SRC EXTI_SOURCE_GPIOB
+
+/* TACHO: open-drain from L6235; counted by TIMER1 in external clock mode.   */
+#define PAPR_PIN_L6235_TACHO_PORT    GPIOA
+#define PAPR_PIN_L6235_TACHO_PIN     GPIO_PIN_8
+#define PAPR_PIN_L6235_TACHO_AF      GPIO_AF_1
+#define PAPR_TACHO_TIMER             TIMER1
+
+/* ---- Battery, flow, pressure, temperature -------------------------------- */
+
+/* ADC0 multi-channel scan: pack voltage divider, shunt amplifier, flow,    */
+/* and NTC thermistor on the motor housing.                                  */
+#define PAPR_PIN_VBAT_PORT           GPIOA
+#define PAPR_PIN_VBAT_PIN            GPIO_PIN_0
+#define PAPR_ADC_VBAT_CH             ADC_CHANNEL_0
+
+#define PAPR_PIN_IBAT_PORT           GPIOA
+#define PAPR_PIN_IBAT_PIN            GPIO_PIN_1
+#define PAPR_ADC_IBAT_CH             ADC_CHANNEL_1
+
+#define PAPR_PIN_FLOW_PORT           GPIOA
+#define PAPR_PIN_FLOW_PIN            GPIO_PIN_2
+#define PAPR_ADC_FLOW_CH             ADC_CHANNEL_2
+
+#define PAPR_PIN_TEMP_PORT           GPIOA
+#define PAPR_PIN_TEMP_PIN            GPIO_PIN_3
+#define PAPR_ADC_TEMP_CH             ADC_CHANNEL_3
+
+/* I2C0 to differential-pressure sensor (e.g. Sensirion SDP610 or NXP MPXV). */
+#define PAPR_PIN_I2C_SCL_PORT        GPIOB
+#define PAPR_PIN_I2C_SCL_PIN         GPIO_PIN_6
+#define PAPR_PIN_I2C_SDA_PORT        GPIOB
+#define PAPR_PIN_I2C_SDA_PIN         GPIO_PIN_7
+#define PAPR_I2C_PERIPH              I2C0
+
+/* ---- User interface ------------------------------------------------------ */
+
+#define PAPR_PIN_BTN_POWER_PORT      GPIOC
+#define PAPR_PIN_BTN_POWER_PIN       GPIO_PIN_13
+
+#define PAPR_PIN_BTN_LEVEL_PORT      GPIOB
+#define PAPR_PIN_BTN_LEVEL_PIN       GPIO_PIN_0
+
+#define PAPR_PIN_LED_OK_PORT         GPIOB
+#define PAPR_PIN_LED_OK_PIN          GPIO_PIN_1
+
+#define PAPR_PIN_LED_WARN_PORT       GPIOB
+#define PAPR_PIN_LED_WARN_PIN        GPIO_PIN_2
+
+#define PAPR_PIN_LED_FAULT_PORT      GPIOB
+#define PAPR_PIN_LED_FAULT_PIN       GPIO_PIN_10
+
+/* Buzzer driven by TIMER2_CH0 PWM. */
+#define PAPR_PIN_BUZZER_PORT         GPIOA
+#define PAPR_PIN_BUZZER_PIN          GPIO_PIN_6
+#define PAPR_PIN_BUZZER_AF           GPIO_AF_2
+#define PAPR_BUZZER_TIMER            TIMER2
+#define PAPR_BUZZER_TIMER_CH         TIMER_CH_0
+
+/* ---- Optional UART for telemetry / IoT bridge ---------------------------- */
+
+#define PAPR_PIN_UART_TX_PORT        GPIOA
+#define PAPR_PIN_UART_TX_PIN         GPIO_PIN_9
+#define PAPR_PIN_UART_RX_PORT        GPIOA
+#define PAPR_PIN_UART_RX_PIN         GPIO_PIN_10
+#define PAPR_UART_PERIPH             USART0
+
+#endif /* PAPR_PINMAP_GD32E517RE_H */
