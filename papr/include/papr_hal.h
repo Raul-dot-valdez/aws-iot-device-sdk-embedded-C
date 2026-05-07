@@ -37,12 +37,24 @@ papr_status_t papr_hal_l6235_set_brake(bool brake_engaged);
 bool          papr_hal_l6235_diag_active(void);
 papr_status_t papr_hal_l6235_read_tacho_rpm(uint16_t *out);
 
-/* Sensor reads. Return PAPR_ERR_HW on bus failure. */
+/* Sensor reads. Return PAPR_ERR_HW on bus failure.
+ * The differential-pressure sensor (Sensirion SDP810) lives behind a portable
+ * driver in the core and is *not* a HAL function — it uses the I²C primitives
+ * below. */
 papr_status_t papr_hal_read_flow_lpm(uint16_t *out);
-papr_status_t papr_hal_read_pressure_pa(uint16_t *out);
 papr_status_t papr_hal_read_battery_mv(uint16_t *out);
 papr_status_t papr_hal_read_battery_ma(uint16_t *out);
 papr_status_t papr_hal_read_temperature_c10(int16_t *out);
+
+/* Raw I²C transport. The slave address is the 7-bit form (LSB = 0).
+ * Implementations must perform a complete START / addr / payload / STOP
+ * transaction. A repeated-start read-after-write is exposed as a separate
+ * helper so SDP810 reads (which use a plain stop-then-start) and other
+ * sensors that require Sr both fit naturally. */
+papr_status_t papr_hal_i2c_write(uint8_t addr7,
+                                 const uint8_t *data, size_t len);
+papr_status_t papr_hal_i2c_read(uint8_t addr7,
+                                uint8_t *data, size_t len);
 
 /* User interface: button, LEDs, buzzer. */
 bool papr_hal_button_power_pressed(void);

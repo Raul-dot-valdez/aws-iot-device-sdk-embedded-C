@@ -12,6 +12,12 @@ Reference firmware for a Powered Air-Purifying Respirator (PAPR) running on
   [GigaDevice GD32E517RE](https://www.gigadevice.com/microcontroller/gd32e517re/)
   (Cortex-M33 + FPU at 180 MHz, 512 KB Flash, 128 KB SRAM, LQFP64 package
   exposing 51 GPIO pins).
+- **Revision 4** — differential pressure path moved to a
+  [Sensirion SDP810-500Pa](https://sensirion.com/products/catalog/SDP810-500Pa/)
+  (4-pin tube-connection variant, I²C address 0x25). Added a portable
+  SDP810 driver with full Sensirion CRC-8 framing; the HAL now exposes raw
+  I²C primitives instead of a high-level pressure call. `pressure_pa` is
+  now `int16_t` since the chip reports signed differential pressure.
 
 ## Layout
 
@@ -84,11 +90,32 @@ for the remaining 13 of the 64 LQFP positions.
 
 - `papr_controller` — supervisory state machine.
 - `papr_blower` — closed-loop airflow PID; output is L6235 phase current in mA.
-- `papr_l6235` — chip driver. Translates current (mA) → VREF DAC code via
-  `I_peak = VREF / R_sense`; drives EN/FWD/BRAKE; monitors DIAG and TACHO.
+- `papr_l6235` — L6235 chip driver. Translates current (mA) → VREF DAC code
+  via `I_peak = VREF / R_sense`; drives EN/FWD/BRAKE; monitors DIAG and TACHO.
+- `papr_sdp810` — portable Sensirion SDP810 driver. Issues "start continuous
+  measurement, differential pressure, with averaging" (`0x36 0x1E`), reads
+  9-byte frames, validates Sensirion CRC-8 over each (pressure, temperature,
+  scale-factor) word, and applies the chip-reported scale factor (60 LSB/Pa
+  for the 500 Pa range).
 - `papr_battery`, `papr_sensors`, `papr_alarms` — battery state, environmental
   sensors, alarm latching/rendering.
-- `papr_hal` — vendor-agnostic hardware contract.
+- `papr_hal` — vendor-agnostic hardware contract; only exposes raw I²C
+  transport (`papr_hal_i2c_write` / `papr_hal_i2c_read`) — sensor protocols
+  live in portable drivers.
+
+## SDP810-500Pa wiring (4-pin tube version)
+
+| SDP810 pin | Signal | Connect to                              |
+| ---------- | ------ | --------------------------------------- |
+| 1          | VDD    | 3.3 V rail                              |
+| 2          | SDA    | MCU SDA + 4.7 kΩ pull-up to 3.3 V       |
+| 3          | GND    | board ground                            |
+| 4          | SCL    | MCU SCL + 4.7 kΩ pull-up to 3.3 V       |
+
+The "+" port (high-pressure tube) is plumbed across the device of interest
+(filter inlet / mask-side breathing circuit); the "−" port goes to ambient
+or the reference branch. I²C address is fixed at `0x25` for the SDP810 and
+defined as `PAPR_SDP810_I2C_ADDR` in `papr_config.h`.
 
 ## Safety notes
 

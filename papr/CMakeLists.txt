@@ -22,6 +22,7 @@ add_library(papr_core STATIC
     src/papr_sensors.c
     src/papr_alarms.c
     src/papr_l6235.c
+    src/papr_sdp810.c
     src/papr_controller.c
 )
 target_include_directories(papr_core PUBLIC include)

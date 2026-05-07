@@ -50,7 +50,7 @@ typedef enum
 typedef struct
 {
     uint16_t flow_lpm;          /* Measured airflow, litres per minute */
-    uint16_t pressure_pa;       /* Differential pressure across filter */
+    int16_t  pressure_pa;       /* Differential pressure across filter, signed */
     int16_t  temperature_c10;   /* Motor housing temperature, 0.1 °C */
     uint16_t battery_mv;        /* Pack voltage, millivolts */
     uint16_t battery_ma;        /* Pack discharge current, milliamps */

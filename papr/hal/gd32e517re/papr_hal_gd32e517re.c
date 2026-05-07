@@ -333,13 +333,12 @@ papr_status_t papr_hal_read_temperature_c10(int16_t *out)
 }
 
 /* ------------------------------------------------------------------------- */
-/* I2C pressure sensor                                                       */
+/* I²C transport (used by the portable Sensirion SDP810 driver)              */
 /* ------------------------------------------------------------------------- */
 
-#define PRESSURE_I2C_ADDR  (0x40U << 1)
-#define PRESSURE_REG_DATA  0xF1U
+#define I2C_TIMEOUT_LOOPS  200000U
 
-static void i2c_pressure_init(void)
+static void i2c_bus_init(void)
 {
     rcu_periph_clock_enable(RCU_I2C0);
     gpio_init(PAPR_PIN_I2C_SCL_PORT, GPIO_MODE_AF_OD, GPIO_OSPEED_50MHZ,
@@ -355,67 +354,81 @@ static void i2c_pressure_init(void)
     i2c_ack_config(PAPR_I2C_PERIPH, I2C_ACK_ENABLE);
 }
 
-static papr_status_t i2c_read_word(uint8_t reg, uint16_t *value)
+static papr_status_t wait_flag(uint32_t flag)
 {
-    uint32_t timeout = 100000U;
+    uint32_t t = I2C_TIMEOUT_LOOPS;
+    while (!i2c_flag_get(PAPR_I2C_PERIPH, flag) && --t) { }
+    return (t == 0U) ? PAPR_ERR_TIMEOUT : PAPR_OK;
+}
 
-    while (i2c_flag_get(PAPR_I2C_PERIPH, I2C_FLAG_I2CBSY) && --timeout) { }
-    if (timeout == 0U) { return PAPR_ERR_TIMEOUT; }
+static papr_status_t wait_busy_clear(void)
+{
+    uint32_t t = I2C_TIMEOUT_LOOPS;
+    while (i2c_flag_get(PAPR_I2C_PERIPH, I2C_FLAG_I2CBSY) && --t) { }
+    return (t == 0U) ? PAPR_ERR_TIMEOUT : PAPR_OK;
+}
 
-    i2c_start_on_bus(PAPR_I2C_PERIPH);
-    timeout = 100000U;
-    while (!i2c_flag_get(PAPR_I2C_PERIPH, I2C_FLAG_SBSEND) && --timeout) { }
-    if (timeout == 0U) { return PAPR_ERR_TIMEOUT; }
-
-    i2c_master_addressing(PAPR_I2C_PERIPH, PRESSURE_I2C_ADDR, I2C_TRANSMITTER);
-    timeout = 100000U;
-    while (!i2c_flag_get(PAPR_I2C_PERIPH, I2C_FLAG_ADDSEND) && --timeout) { }
-    if (timeout == 0U) { return PAPR_ERR_TIMEOUT; }
-    i2c_flag_clear(PAPR_I2C_PERIPH, I2C_FLAG_ADDSEND);
-
-    i2c_data_transmit(PAPR_I2C_PERIPH, reg);
-    timeout = 100000U;
-    while (!i2c_flag_get(PAPR_I2C_PERIPH, I2C_FLAG_TBE) && --timeout) { }
-    if (timeout == 0U) { return PAPR_ERR_TIMEOUT; }
+papr_status_t papr_hal_i2c_write(uint8_t addr7, const uint8_t *data, size_t len)
+{
+    if (data == NULL || len == 0U) { return PAPR_ERR_PARAM; }
+    papr_status_t s = wait_busy_clear();
+    if (s != PAPR_OK) { return s; }
 
     i2c_start_on_bus(PAPR_I2C_PERIPH);
-    timeout = 100000U;
-    while (!i2c_flag_get(PAPR_I2C_PERIPH, I2C_FLAG_SBSEND) && --timeout) { }
-    if (timeout == 0U) { return PAPR_ERR_TIMEOUT; }
+    s = wait_flag(I2C_FLAG_SBSEND);
+    if (s != PAPR_OK) { return s; }
 
-    i2c_master_addressing(PAPR_I2C_PERIPH, PRESSURE_I2C_ADDR, I2C_RECEIVER);
-    timeout = 100000U;
-    while (!i2c_flag_get(PAPR_I2C_PERIPH, I2C_FLAG_ADDSEND) && --timeout) { }
-    if (timeout == 0U) { return PAPR_ERR_TIMEOUT; }
+    i2c_master_addressing(PAPR_I2C_PERIPH, (uint32_t)(addr7 << 1),
+                          I2C_TRANSMITTER);
+    s = wait_flag(I2C_FLAG_ADDSEND);
+    if (s != PAPR_OK) { return s; }
     i2c_flag_clear(PAPR_I2C_PERIPH, I2C_FLAG_ADDSEND);
 
-    uint8_t hi = 0U, lo = 0U;
-    timeout = 100000U;
-    while (!i2c_flag_get(PAPR_I2C_PERIPH, I2C_FLAG_RBNE) && --timeout) { }
-    if (timeout == 0U) { return PAPR_ERR_TIMEOUT; }
-    hi = (uint8_t)i2c_data_receive(PAPR_I2C_PERIPH);
-
-    i2c_ack_config(PAPR_I2C_PERIPH, I2C_ACK_DISABLE);
-    timeout = 100000U;
-    while (!i2c_flag_get(PAPR_I2C_PERIPH, I2C_FLAG_RBNE) && --timeout) { }
-    if (timeout == 0U) { return PAPR_ERR_TIMEOUT; }
-    lo = (uint8_t)i2c_data_receive(PAPR_I2C_PERIPH);
+    for (size_t i = 0U; i < len; ++i)
+    {
+        s = wait_flag(I2C_FLAG_TBE);
+        if (s != PAPR_OK) { i2c_stop_on_bus(PAPR_I2C_PERIPH); return s; }
+        i2c_data_transmit(PAPR_I2C_PERIPH, data[i]);
+    }
+    s = wait_flag(I2C_FLAG_BTC);
+    if (s != PAPR_OK) { i2c_stop_on_bus(PAPR_I2C_PERIPH); return s; }
 
     i2c_stop_on_bus(PAPR_I2C_PERIPH);
-    i2c_ack_config(PAPR_I2C_PERIPH, I2C_ACK_ENABLE);
-
-    *value = (uint16_t)(((uint16_t)hi << 8) | lo);
     return PAPR_OK;
 }
 
-papr_status_t papr_hal_read_pressure_pa(uint16_t *out)
+papr_status_t papr_hal_i2c_read(uint8_t addr7, uint8_t *data, size_t len)
 {
-    if (out == NULL) { return PAPR_ERR_PARAM; }
-    uint16_t raw = 0U;
-    papr_status_t s = i2c_read_word(PRESSURE_REG_DATA, &raw);
+    if (data == NULL || len == 0U) { return PAPR_ERR_PARAM; }
+    papr_status_t s = wait_busy_clear();
     if (s != PAPR_OK) { return s; }
-    /* Sensirion SDP-style: dP[Pa] = raw / scale_factor (240 for SDP610). */
-    *out = (uint16_t)(raw / 240U);
+
+    i2c_ack_config(PAPR_I2C_PERIPH, I2C_ACK_ENABLE);
+    i2c_ackpos_config(PAPR_I2C_PERIPH, I2C_ACKPOS_CURRENT);
+    i2c_start_on_bus(PAPR_I2C_PERIPH);
+    s = wait_flag(I2C_FLAG_SBSEND);
+    if (s != PAPR_OK) { return s; }
+
+    i2c_master_addressing(PAPR_I2C_PERIPH, (uint32_t)(addr7 << 1),
+                          I2C_RECEIVER);
+    s = wait_flag(I2C_FLAG_ADDSEND);
+    if (s != PAPR_OK) { return s; }
+    i2c_flag_clear(PAPR_I2C_PERIPH, I2C_FLAG_ADDSEND);
+
+    for (size_t i = 0U; i < len; ++i)
+    {
+        if (i + 1U == len)
+        {
+            i2c_ack_config(PAPR_I2C_PERIPH, I2C_ACK_DISABLE);
+            i2c_stop_on_bus(PAPR_I2C_PERIPH);
+        }
+        s = wait_flag(I2C_FLAG_RBNE);
+        if (s != PAPR_OK) { return s; }
+        data[i] = (uint8_t)i2c_data_receive(PAPR_I2C_PERIPH);
+    }
+
+    /* Restore default ACK behaviour for subsequent transactions. */
+    i2c_ack_config(PAPR_I2C_PERIPH, I2C_ACK_ENABLE);
     return PAPR_OK;
 }
 
@@ -537,7 +550,7 @@ papr_status_t papr_hal_init(void)
     dac_init_vref();
     tacho_timer_init();
     adc_init_papr();
-    i2c_pressure_init();
+    i2c_bus_init();
     buzzer_init();
     wdt_init();
     return PAPR_OK;

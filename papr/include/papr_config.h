@@ -124,6 +124,32 @@
 #define PAPR_L6235_VREF_DAC_MAX         4095U
 #endif
 
+/* ---- Sensirion SDP810-500Pa differential pressure sensor ------------------
+ * 4-pin tube-connection variant. I²C interface, 7-bit address 0x25 by default,
+ * ±500 Pa range, scale factor 60 LSB/Pa, on-chip temperature compensation. */
+
+#ifndef PAPR_SDP810_I2C_ADDR
+#define PAPR_SDP810_I2C_ADDR            0x25U
+#endif
+
+/* Scale factor for the −500..+500 Pa variant (datasheet table 6). */
+#ifndef PAPR_SDP810_SCALE
+#define PAPR_SDP810_SCALE               60
+#endif
+
+/* Time the chip needs after a "start continuous measurement" command before
+ * the first 9-byte read can succeed. The datasheet quotes 8 ms typ; round up. */
+#ifndef PAPR_SDP810_STARTUP_DELAY_MS
+#define PAPR_SDP810_STARTUP_DELAY_MS    20U
+#endif
+
+/* Hard limit on how often we issue the start command. Once continuous mode
+ * is running the chip refreshes its internal registers every 0.5 ms, so the
+ * sensors module just reads the latest 9-byte snapshot. */
+#ifndef PAPR_SDP810_RESTART_PERIOD_MS
+#define PAPR_SDP810_RESTART_PERIOD_MS   60000U
+#endif
+
 /* Watchdog kick interval. Must be shorter than the hardware watchdog window. */
 #ifndef PAPR_WDT_KICK_MS
 #define PAPR_WDT_KICK_MS                100U
