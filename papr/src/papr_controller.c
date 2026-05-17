@@ -109,6 +109,9 @@ papr_status_t papr_controller_init(papr_controller_t *c)
      * supervisor from running locally. */
     (void)papr_ble_init(&c->ble);
 
+    (void)papr_keypad_init(&c->keypad);
+    (void)papr_energy_init(&c->energy);
+
     c->rc_power_on_pending    = false;
     c->rc_power_off_pending   = false;
     c->rc_level_pending       = false;
@@ -117,6 +120,93 @@ papr_status_t papr_controller_init(papr_controller_t *c)
 
     enter_state(c, PAPR_STATE_INIT);
     return PAPR_OK;
+}
+
+/* Translates one keypad event into a controller action. Keeps key-handling
+ * declarative — the supervisor logic in papr_controller_step only sees the
+ * effect (e.g. "shutdown requested") rather than raw column/row state. */
+static void handle_key_event(papr_controller_t *c,
+                             const papr_key_event_t *e,
+                             uint32_t now_ms)
+{
+    /* Most actions fire on release so a momentary press doesn't trigger
+     * twice when followed by a long-press. Power, however, uses long-press
+     * to commit a real shutdown (safety: prevents accidental power-off
+     * while the worker is wearing the hood). */
+    if (e->kind == PAPR_KEY_EVT_LONG_PRESS && e->key == PAPR_KEY_POWER)
+    {
+        if (c->state == PAPR_STATE_RUNNING || c->state == PAPR_STATE_ALARM)
+        {
+            enter_state(c, PAPR_STATE_SHUTDOWN);
+        }
+        else if (c->state == PAPR_STATE_STANDBY)
+        {
+            apply_level(c);
+            (void)papr_blower_start(&c->blower);
+            papr_energy_on_running(&c->energy, now_ms);
+            enter_state(c, PAPR_STATE_RUNNING);
+        }
+        return;
+    }
+
+    if (e->kind != PAPR_KEY_EVT_RELEASE) { return; }
+
+    switch (e->key)
+    {
+        case PAPR_KEY_LEVEL_UP:
+            if (c->level < PAPR_LEVEL_HIGH)
+            {
+                c->level = (papr_flow_level_t)(c->level + 1U);
+                apply_level(c);
+            }
+            break;
+
+        case PAPR_KEY_LEVEL_DOWN:
+            if (c->level > PAPR_LEVEL_LOW)
+            {
+                c->level = (papr_flow_level_t)(c->level - 1U);
+                apply_level(c);
+            }
+            break;
+
+        case PAPR_KEY_MUTE:
+            papr_alarms_mute(&c->alarms, now_ms, 60000U);
+            break;
+
+        case PAPR_KEY_MODE:
+            papr_energy_set_auto(&c->energy, !papr_energy_get_auto(&c->energy));
+            break;
+
+        case PAPR_KEY_PAIR:
+            (void)papr_ble_module_reset(&c->ble);
+            break;
+
+        case PAPR_KEY_RESET:
+            if (c->state == PAPR_STATE_FAULT)
+            {
+                c->alarms.active_mask  = 0U;
+                c->alarms.latched_mask = 0U;
+                enter_state(c, PAPR_STATE_INIT);
+            }
+            break;
+
+        case PAPR_KEY_BRIGHT:
+        case PAPR_KEY_INFO:
+        case PAPR_KEY_POWER:    /* short press has no action; long-press above */
+        default:
+            break;
+    }
+}
+
+static void dispatch_keys(papr_controller_t *c, uint32_t now_ms)
+{
+    (void)papr_keypad_scan(&c->keypad, now_ms);
+
+    papr_key_event_t evt;
+    while (papr_keypad_poll(&c->keypad, &evt))
+    {
+        handle_key_event(c, &evt, now_ms);
+    }
 }
 
 static void apply_remote_requests(papr_controller_t *c, uint32_t now)
@@ -152,6 +242,7 @@ static void apply_remote_requests(papr_controller_t *c, uint32_t now)
         {
             apply_level(c);
             (void)papr_blower_start(&c->blower);
+            papr_energy_on_running(&c->energy, now);
             enter_state(c, PAPR_STATE_RUNNING);
         }
     }
@@ -185,10 +276,36 @@ papr_status_t papr_controller_step(papr_controller_t *c)
         c->last_sensor_ms = now;
     }
 
-    /* Service the wireless link first so any commands queued by the mobile
-     * app are honoured in the same supervisor tick. */
+    /* Service local UI and the wireless link before stepping the state
+     * machine, so any commands queued by either path are honoured in the
+     * same supervisor tick. */
+    dispatch_keys(c, now);
     (void)papr_ble_poll(&c->ble, c);
     apply_remote_requests(c, now);
+
+    /* Feed the energy module with the freshest telemetry. */
+    bool blower_running = (c->state == PAPR_STATE_RUNNING ||
+                           c->state == PAPR_STATE_ALARM);
+    papr_energy_update(&c->energy,
+                       c->sensors.pressure_pa,
+                       c->battery.current_ma,
+                       c->battery.soc_percent,
+                       blower_running,
+                       now);
+
+    /* Honour an auto-mode level suggestion if it differs from the user's
+     * current selection. The energy module already applies its own hold-off
+     * so the controller does not need additional rate-limiting. */
+    if (papr_energy_get_auto(&c->energy))
+    {
+        papr_flow_level_t suggested =
+            papr_energy_suggest_level(&c->energy, c->level);
+        if (suggested != c->level)
+        {
+            c->level = suggested;
+            apply_level(c);
+        }
+    }
 
     switch (c->state)
     {
@@ -210,12 +327,8 @@ papr_status_t papr_controller_step(papr_controller_t *c)
 
         case PAPR_STATE_STANDBY:
             (void)papr_blower_stop(&c->blower);
-            if (papr_hal_button_power_pressed())
-            {
-                apply_level(c);
-                (void)papr_blower_start(&c->blower);
-                enter_state(c, PAPR_STATE_RUNNING);
-            }
+            /* POWER long-press in standby starts the blower (handled by the
+             * keypad dispatcher) — nothing else to do here. */
             break;
 
         case PAPR_STATE_RUNNING:
@@ -231,14 +344,8 @@ papr_status_t papr_controller_step(papr_controller_t *c)
             {
                 enter_state(c, PAPR_STATE_ALARM);
             }
-            if (papr_hal_button_level_pressed())
-            {
-                papr_controller_cycle_level(c);
-            }
-            if (papr_hal_button_power_pressed())
-            {
-                enter_state(c, PAPR_STATE_SHUTDOWN);
-            }
+            /* LEVEL_UP / LEVEL_DOWN and POWER long-press → shutdown are
+             * dispatched in handle_key_event(); nothing else needed here. */
             break;
 
         case PAPR_STATE_ALARM:
@@ -265,6 +372,7 @@ papr_status_t papr_controller_step(papr_controller_t *c)
 
         case PAPR_STATE_SHUTDOWN:
             (void)papr_blower_stop(&c->blower);
+            papr_energy_on_idle(&c->energy, now);
             enter_state(c, PAPR_STATE_STANDBY);
             break;
 
@@ -304,6 +412,9 @@ void papr_controller_get_telemetry(const papr_controller_t *c,
     out->battery_soc_percent  = c->battery.soc_percent;
     out->motor_rpm            = papr_blower_rpm(&c->blower);
     out->duty_permille        = papr_blower_duty_permille(&c->blower);
+    out->breaths_per_min      = papr_energy_breaths_per_min(&c->energy);
+    out->remaining_minutes    = papr_energy_remaining_minutes(&c->energy);
+    out->auto_mode_active     = papr_energy_get_auto(&c->energy) ? 1U : 0U;
 }
 
 void papr_controller_snapshot(const papr_controller_t *c,
@@ -344,4 +455,10 @@ void papr_controller_remote_reset_fault(papr_controller_t *c)
 {
     if (c == NULL) { return; }
     c->rc_reset_fault_pending = true;
+}
+
+void papr_controller_remote_set_auto(papr_controller_t *c, bool enabled)
+{
+    if (c == NULL) { return; }
+    papr_energy_set_auto(&c->energy, enabled);
 }

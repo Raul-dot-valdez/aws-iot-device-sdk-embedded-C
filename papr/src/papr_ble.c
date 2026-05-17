@@ -90,8 +90,8 @@ papr_status_t papr_ble_send_telemetry(papr_ble_t *b,
 {
     if (b == NULL || t == NULL) { return PAPR_ERR_PARAM; }
 
-    /* Layout (28 bytes): see papr_ble.h header comment. */
-    uint8_t buf[28];
+    /* Layout (32 bytes): base telemetry + rev-6 adaptive-comfort tail.    */
+    uint8_t buf[32];
     uint8_t *p = buf;
     *p++ = state;
     *p++ = level;
@@ -105,8 +105,10 @@ papr_status_t papr_ble_send_telemetry(papr_ble_t *b,
     *p++ = t->battery_soc_percent;
     pack_u16_le(p, t->motor_rpm);              p += 2;
     pack_u16_le(p, t->duty_permille);          p += 2;
-    /* size sanity */
-    /* (28 bytes total when all fields packed) */
+    *p++ = t->breaths_per_min;
+    pack_u16_le(p, t->remaining_minutes);      p += 2;
+    *p++ = t->auto_mode_active;
+
     b->last_telem_ms = papr_hal_now_ms();
     return send_frame(PAPR_BLE_NTF_TELEMETRY, buf, (uint8_t)(p - buf));
 }
@@ -169,6 +171,12 @@ static void dispatch(papr_ble_t *b, struct papr_controller *ctrl,
             (void)papr_ble_send_telemetry(b, &t, state, level, mask);
             break;
         }
+
+        case PAPR_BLE_CMD_SET_AUTO_MODE:
+            if (len != 1U) { send_nack(cmd, 1U); return; }
+            papr_controller_remote_set_auto(ctrl, payload[0] != 0U);
+            send_ack(cmd);
+            break;
 
         default:
             send_nack(cmd, 2U);   /* unknown command */

@@ -26,8 +26,20 @@ Reference firmware for a Powered Air-Purifying Respirator (PAPR) running on
     binary protocol (preamble `AA 55`, length, command, payload, CRC-8)
     lets a paired mobile app read live telemetry, change the flow level,
     power the unit on/off, mute alarms, and clear faults.
+- **Revision 6** — adds two new modules:
+  - **`papr_energy`** adaptive comfort / battery-saving algorithm. Detects
+    breathing rate and intensity from the SDP810 dP stream and, when auto
+    mode is enabled, nudges the blower setpoint up or down within the
+    user-allowed range without ever falling below the safety floor. Also
+    runs a coulomb counter for runtime estimation and a per-shift EWMA
+    that learns each worker's typical session length across power cycles.
+  - **`papr_keypad`** portable 3x3 switch-matrix scanner (POWER,
+    LEVEL_UP/DOWN, MUTE, MODE, PAIR, BRIGHT, INFO, RESET) with debounce,
+    press / release / long-press edges, and an event FIFO. POWER requires
+    a long-press to actually start or stop the blower, preventing
+    accidental power-off while wearing the hood.
 
-  All revision-1 modules and headers remain in place; revisions 2-5 only
+  All revision-1 modules and headers remain in place; revisions 2-6 only
   added or extended functionality.
 
 ## Layout
@@ -116,6 +128,15 @@ for the remaining 13 of the 64 LQFP positions.
   Owns a TX serializer and a state-machine RX parser; dispatches commands
   to `papr_controller_remote_*` hooks; sends periodic telemetry frames and
   edge-triggered events for state, level, and alarm-mask changes.
+- `papr_keypad` — portable 3x3 switch-matrix scanner. Drives one row at a
+  time, samples columns, debounces, emits PRESS / RELEASE / LONG_PRESS
+  events into a FIFO consumed by the controller. Layout:
+  `[POWER | LEVEL_UP | LEVEL_DOWN] / [MUTE | MODE | PAIR] /
+   [BRIGHT | INFO | RESET]`.
+- `papr_energy` — adaptive comfort and runtime estimator. Tracks dP for
+  breathing rate / amplitude, recommends a flow level for auto mode,
+  runs a coulomb counter for "minutes remaining", and smooths the
+  worker's session lengths with an EWMA.
 - `papr_battery`, `papr_sensors`, `papr_alarms` — battery state, environmental
   sensors, alarm latching/rendering.
 - `papr_hal` — vendor-agnostic hardware contract; only exposes raw I²C
@@ -185,6 +206,7 @@ Mobile → device commands:
 | 0x05 | RESET_FAULT    | empty                                 |
 | 0x06 | GET_VERSION    | empty                                 |
 | 0x07 | GET_TELEMETRY  | empty                                 |
+| 0x08 | SET_AUTO_MODE  | `[u8 enable]` (0=manual, 1=adaptive)  |
 
 Device → mobile notifications:
 
@@ -196,7 +218,58 @@ Device → mobile notifications:
 | 0x83 | EVENT          | `[u8 event_type, …]`                  |
 
 Telemetry is broadcast every `PAPR_BLE_TELEM_PERIOD_MS` (500 ms by
-default) and on every state, level, or alarm-mask change.
+default) and on every state, level, or alarm-mask change. The 32-byte
+frame includes the rev-6 adaptive-comfort fields (`breaths_per_min`,
+`remaining_minutes`, `auto_mode_active`).
+
+## Switch matrix (rev 6)
+
+The 3x3 keypad replaces the earlier two-button input. On the GD32E517RE
+port it consumes 6 GPIOs that were previously unallocated:
+
+| Function   | GD32E517 pin | Direction          |
+| ---------- | ------------ | ------------------ |
+| ROW0..ROW2 | PB3 / PB4 / PB5  | open-drain output |
+| COL0..COL2 | PB8 / PB9 / PB11 | input + pull-up   |
+
+Key matrix layout:
+
+```
+   col 0       col 1       col 2
+  [POWER]    [LVL UP]    [LVL DN]    row 0
+  [MUTE ]    [MODE  ]    [PAIR  ]    row 1
+  [BRIGHT]   [INFO  ]    [RESET ]    row 2
+```
+
+Semantics:
+
+- **POWER** — long-press (≥ 1.2 s) starts the blower from standby or
+  initiates shutdown from running / alarm. Short press has no effect, so
+  brushing the hood against the user's body cannot power the unit off.
+- **LEVEL_UP / LEVEL_DOWN** — bump the manual flow level by one step.
+- **MUTE** — silence the alarm buzzer for 60 s.
+- **MODE** — toggle adaptive-comfort (auto level) on or off.
+- **PAIR** — reset the BLE module so the mobile app can re-pair.
+- **RESET** — clear a latched fault and re-arm the supervisor.
+- **BRIGHT / INFO** — reserved for the display HMI in a later revision.
+
+## Adaptive comfort algorithm (rev 6)
+
+When the user enables auto mode (MODE key or BLE `SET_AUTO_MODE` 1):
+
+1. The energy module samples dP from the SDP810 every 100 ms.
+2. A 32-sample moving average centres the signal; threshold-crossings of
+   the centred signal count as inhale onsets and produce a breaths-per-
+   minute estimate (EWMA smoothed).
+3. A peak-amplitude tracker estimates breath intensity in Pa.
+4. Every 30 s (hold-off period), the algorithm may bump the level down by
+   one step if the worker is breathing lightly (≤ 12 bpm and < 40 Pa
+   amplitude) or up by one step if they are breathing heavily (≥ 24 bpm
+   or > 80 Pa amplitude). The floor is always `PAPR_LEVEL_LOW`.
+5. In parallel, a coulomb counter integrates pack current to estimate
+   minutes of runtime remaining, and an EWMA tracks the user's typical
+   session length so the mobile app can warn early when the budget runs
+   short of their usual shift duration.
 
 ## Safety notes
 

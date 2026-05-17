@@ -268,6 +268,19 @@ papr_status_t papr_hal_read_temperature_c10(int16_t *out)
 bool papr_hal_button_power_pressed(void) { return false; }
 bool papr_hal_button_level_pressed(void) { return false; }
 
+papr_status_t papr_hal_keypad_drive_row(uint8_t row, bool active)
+{
+    (void)row;
+    (void)active;
+    return PAPR_OK;
+}
+
+bool papr_hal_keypad_read_col(uint8_t col)
+{
+    (void)col;
+    return false;
+}
+
 papr_status_t papr_hal_led_set(uint8_t led_id, bool on)
 {
     (void)led_id;

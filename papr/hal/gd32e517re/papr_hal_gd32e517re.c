@@ -464,6 +464,61 @@ papr_status_t papr_hal_led_set(uint8_t led_id, bool on)
 }
 
 /* ------------------------------------------------------------------------- */
+/* 3x3 switch matrix                                                         */
+/* ------------------------------------------------------------------------- */
+
+static const uint32_t s_keypad_row_ports[PAPR_KEYPAD_ROWS] = {
+    PAPR_PIN_KEYPAD_ROW0_PORT, PAPR_PIN_KEYPAD_ROW1_PORT, PAPR_PIN_KEYPAD_ROW2_PORT
+};
+static const uint32_t s_keypad_row_pins[PAPR_KEYPAD_ROWS] = {
+    PAPR_PIN_KEYPAD_ROW0_PIN,  PAPR_PIN_KEYPAD_ROW1_PIN,  PAPR_PIN_KEYPAD_ROW2_PIN
+};
+static const uint32_t s_keypad_col_ports[PAPR_KEYPAD_COLS] = {
+    PAPR_PIN_KEYPAD_COL0_PORT, PAPR_PIN_KEYPAD_COL1_PORT, PAPR_PIN_KEYPAD_COL2_PORT
+};
+static const uint32_t s_keypad_col_pins[PAPR_KEYPAD_COLS] = {
+    PAPR_PIN_KEYPAD_COL0_PIN,  PAPR_PIN_KEYPAD_COL1_PIN,  PAPR_PIN_KEYPAD_COL2_PIN
+};
+
+static void keypad_init(void)
+{
+    /* Rows are open-drain so two simultaneously-active rows cannot shoot
+     * through each other when a column is shared by multiple keys. */
+    for (uint8_t r = 0U; r < PAPR_KEYPAD_ROWS; ++r)
+    {
+        gpio_init(s_keypad_row_ports[r], GPIO_MODE_OUT_OD, GPIO_OSPEED_2MHZ,
+                  s_keypad_row_pins[r]);
+        gpio_bit_set(s_keypad_row_ports[r], s_keypad_row_pins[r]); /* idle high */
+    }
+    for (uint8_t c = 0U; c < PAPR_KEYPAD_COLS; ++c)
+    {
+        gpio_init(s_keypad_col_ports[c], GPIO_MODE_IPU, GPIO_OSPEED_2MHZ,
+                  s_keypad_col_pins[c]);
+    }
+}
+
+papr_status_t papr_hal_keypad_drive_row(uint8_t row, bool active)
+{
+    if (row >= PAPR_KEYPAD_ROWS) { return PAPR_ERR_PARAM; }
+    if (active)
+    {
+        gpio_bit_reset(s_keypad_row_ports[row], s_keypad_row_pins[row]);
+    }
+    else
+    {
+        gpio_bit_set(s_keypad_row_ports[row], s_keypad_row_pins[row]);
+    }
+    return PAPR_OK;
+}
+
+bool papr_hal_keypad_read_col(uint8_t col)
+{
+    if (col >= PAPR_KEYPAD_COLS) { return false; }
+    return gpio_input_bit_get(s_keypad_col_ports[col],
+                              s_keypad_col_pins[col]) == RESET;
+}
+
+/* ------------------------------------------------------------------------- */
 /* Buzzer (TIMER2_CH0 PWM)                                                   */
 /* ------------------------------------------------------------------------- */
 
@@ -657,6 +712,7 @@ papr_status_t papr_hal_init(void)
     tacho_timer_init();
     adc_init_papr();
     i2c_bus_init();
+    keypad_init();
     buzzer_init();
     ble_uart_init();
     wdt_init();

@@ -58,6 +58,9 @@ typedef struct
     uint8_t  battery_soc_percent; /* State of charge, 0..100             */
     uint16_t motor_rpm;           /* Brushless motor speed               */
     uint16_t duty_permille;       /* Current PWM duty in 0.1 %           */
+    uint8_t  breaths_per_min;     /* Detected breathing rate             */
+    uint16_t remaining_minutes;   /* Estimated runtime at current draw   */
+    uint8_t  auto_mode_active;    /* 0 = manual, 1 = adaptive comfort    */
 } papr_telemetry_t;
 
 #endif /* PAPR_TYPES_H */

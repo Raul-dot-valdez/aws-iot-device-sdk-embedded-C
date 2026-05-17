@@ -121,4 +121,23 @@
 /* GDY1124 absolute pressure sensor shares I2C0 with the SDP810
  * (different addresses). No new pins required. */
 
+/* ---- 3x3 switch matrix --------------------------------------------------
+ * Six previously-unused GPIOs scan the user keypad. Rows are open-drain
+ * outputs driven low to activate; columns are inputs with internal pull-up,
+ * so a pressed key reads low through the closed switch. */
+
+#define PAPR_PIN_KEYPAD_ROW0_PORT    GPIOB
+#define PAPR_PIN_KEYPAD_ROW0_PIN     GPIO_PIN_3
+#define PAPR_PIN_KEYPAD_ROW1_PORT    GPIOB
+#define PAPR_PIN_KEYPAD_ROW1_PIN     GPIO_PIN_4
+#define PAPR_PIN_KEYPAD_ROW2_PORT    GPIOB
+#define PAPR_PIN_KEYPAD_ROW2_PIN     GPIO_PIN_5
+
+#define PAPR_PIN_KEYPAD_COL0_PORT    GPIOB
+#define PAPR_PIN_KEYPAD_COL0_PIN     GPIO_PIN_8
+#define PAPR_PIN_KEYPAD_COL1_PORT    GPIOB
+#define PAPR_PIN_KEYPAD_COL1_PIN     GPIO_PIN_9
+#define PAPR_PIN_KEYPAD_COL2_PORT    GPIOB
+#define PAPR_PIN_KEYPAD_COL2_PIN     GPIO_PIN_11
+
 #endif /* PAPR_PINMAP_GD32E517RE_H */

@@ -176,6 +176,89 @@
 #define PAPR_BLE_SYNC0                  0xAAU
 #define PAPR_BLE_SYNC1                  0x55U
 
+/* ---- Switch matrix (3x3) --------------------------------------------------
+ * Six GPIOs scan a 9-key matrix. Rows are driven low one at a time; an
+ * active column reads low through the depressed key. */
+
+#ifndef PAPR_KEYPAD_ROWS
+#define PAPR_KEYPAD_ROWS                3U
+#endif
+
+#ifndef PAPR_KEYPAD_COLS
+#define PAPR_KEYPAD_COLS                3U
+#endif
+
+/* Period between full scans of the matrix. */
+#ifndef PAPR_KEYPAD_SCAN_PERIOD_MS
+#define PAPR_KEYPAD_SCAN_PERIOD_MS      8U
+#endif
+
+/* Number of consecutive scans the same state must be observed before a
+ * press / release event is emitted. */
+#ifndef PAPR_KEYPAD_DEBOUNCE_SCANS
+#define PAPR_KEYPAD_DEBOUNCE_SCANS      3U
+#endif
+
+/* Key-down duration that promotes a PRESS into a LONG_PRESS event. */
+#ifndef PAPR_KEYPAD_LONG_PRESS_MS
+#define PAPR_KEYPAD_LONG_PRESS_MS       1200U
+#endif
+
+/* Capacity of the FIFO that the keypad uses to hand events off to the
+ * supervisor. */
+#ifndef PAPR_KEYPAD_QUEUE_LEN
+#define PAPR_KEYPAD_QUEUE_LEN           8U
+#endif
+
+/* ---- Energy-saving / adaptive comfort algorithm ---------------------------
+ * Watches the SDP810 differential-pressure stream to estimate breathing rate
+ * and intensity, then nudges the flow setpoint within the user-allowed range
+ * to extend battery life without dropping below the safety floor. */
+
+/* Period at which the energy module samples telemetry to feed its history
+ * buffer. Choose around the breathing-rate Nyquist (10 Hz is plenty for
+ * 12-30 breaths/min). */
+#ifndef PAPR_ENERGY_SAMPLE_PERIOD_MS
+#define PAPR_ENERGY_SAMPLE_PERIOD_MS    100U
+#endif
+
+/* Window over which the breathing detector averages dP samples. */
+#ifndef PAPR_ENERGY_WINDOW_SAMPLES
+#define PAPR_ENERGY_WINDOW_SAMPLES      32U
+#endif
+
+/* Minimum amplitude (Pa) of a dP excursion before it is counted as a
+ * breath. Smaller values are treated as quiet/static signal. */
+#ifndef PAPR_ENERGY_BREATH_THRESHOLD_PA
+#define PAPR_ENERGY_BREATH_THRESHOLD_PA 8
+#endif
+
+/* Hold-off between auto-level transitions so the user does not feel the
+ * blower hunt. */
+#ifndef PAPR_ENERGY_LEVEL_HOLD_MS
+#define PAPR_ENERGY_LEVEL_HOLD_MS       30000U
+#endif
+
+/* Breaths-per-minute thresholds for the auto level decision. */
+#ifndef PAPR_ENERGY_BPM_LIGHT
+#define PAPR_ENERGY_BPM_LIGHT           12U
+#endif
+#ifndef PAPR_ENERGY_BPM_HEAVY
+#define PAPR_ENERGY_BPM_HEAVY           24U
+#endif
+
+/* Nominal battery pack capacity in mAh. Used to convert SoC into a runtime
+ * estimate. Override to match the actual pack. */
+#ifndef PAPR_ENERGY_PACK_MAH
+#define PAPR_ENERGY_PACK_MAH            6000U
+#endif
+
+/* Smoothing factor (out of 256) used by the EWMA that tracks the user's
+ * typical session length across boots. Higher = more reactive. */
+#ifndef PAPR_ENERGY_SESSION_EWMA_NUM
+#define PAPR_ENERGY_SESSION_EWMA_NUM    32U
+#endif
+
 /* Watchdog kick interval. Must be shorter than the hardware watchdog window. */
 #ifndef PAPR_WDT_KICK_MS
 #define PAPR_WDT_KICK_MS                100U

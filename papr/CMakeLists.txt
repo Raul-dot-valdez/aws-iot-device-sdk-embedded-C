@@ -25,6 +25,8 @@ add_library(papr_core STATIC
     src/papr_sdp810.c
     src/papr_gdy1124.c
     src/papr_ble.c
+    src/papr_keypad.c
+    src/papr_energy.c
     src/papr_controller.c
 )
 target_include_directories(papr_core PUBLIC include)

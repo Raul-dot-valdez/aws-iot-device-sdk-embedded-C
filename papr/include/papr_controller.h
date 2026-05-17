@@ -5,6 +5,8 @@
 #include "papr_battery.h"
 #include "papr_ble.h"
 #include "papr_blower.h"
+#include "papr_energy.h"
+#include "papr_keypad.h"
 #include "papr_sensors.h"
 #include "papr_types.h"
 
@@ -17,6 +19,8 @@ typedef struct papr_controller
     papr_sensors_t      sensors;
     papr_alarms_t       alarms;
     papr_ble_t          ble;
+    papr_keypad_t       keypad;
+    papr_energy_t       energy;
     uint32_t            last_control_ms;
     uint32_t            last_sensor_ms;
     uint32_t            last_wdt_ms;
@@ -62,5 +66,8 @@ void papr_controller_remote_set_level(papr_controller_t *c,
                                       papr_flow_level_t level);
 void papr_controller_remote_mute(papr_controller_t *c, uint32_t duration_ms);
 void papr_controller_remote_reset_fault(papr_controller_t *c);
+
+/* Toggle adaptive-comfort / auto level mode from the remote app. */
+void papr_controller_remote_set_auto(papr_controller_t *c, bool enabled);
 
 #endif /* PAPR_CONTROLLER_H */

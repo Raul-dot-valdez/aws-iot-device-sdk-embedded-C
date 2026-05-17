@@ -45,6 +45,7 @@ typedef enum
     PAPR_BLE_CMD_RESET_FAULT    = 0x05U,
     PAPR_BLE_CMD_GET_VERSION    = 0x06U,
     PAPR_BLE_CMD_GET_TELEMETRY  = 0x07U,
+    PAPR_BLE_CMD_SET_AUTO_MODE  = 0x08U,    /* payload: [u8 enable] */
 
     PAPR_BLE_NTF_TELEMETRY      = 0x80U,
     PAPR_BLE_NTF_ACK            = 0x81U,

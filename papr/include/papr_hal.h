@@ -70,9 +70,20 @@ bool papr_hal_uart_read_byte(uint8_t *out);
 papr_status_t papr_hal_ble_set_reset(bool asserted);
 bool          papr_hal_ble_host_wake(void);
 
-/* User interface: button, LEDs, buzzer. */
+/* User interface: legacy buttons (kept for backward compat — wired in the
+ * GD32E517RE port but no longer driving the controller), 3x3 switch matrix
+ * (primary input path in rev 6), LEDs, buzzer. */
 bool papr_hal_button_power_pressed(void);
 bool papr_hal_button_level_pressed(void);
+
+/* Drives one row of the keypad to its active level. Active level is HAL-
+ * defined (typically LOW with internal pull-ups on the column inputs). */
+papr_status_t papr_hal_keypad_drive_row(uint8_t row, bool active);
+
+/* Reads one column input. Returns true when the line is at its active
+ * level, i.e. when a key in the currently driven row is depressed. */
+bool papr_hal_keypad_read_col(uint8_t col);
+
 papr_status_t papr_hal_led_set(uint8_t led_id, bool on);
 papr_status_t papr_hal_buzzer_set(bool on, uint16_t freq_hz);
 
