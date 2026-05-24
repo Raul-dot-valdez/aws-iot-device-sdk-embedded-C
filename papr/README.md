@@ -44,10 +44,21 @@ Reference firmware for a Powered Air-Purifying Respirator (PAPR) running on
   resets so a bootloader runs the new image (with rollback). The running
   version is reported over BLE so users can check whether they are up to date.
   Updates are accepted **only while the unit is idle (STANDBY)** — never while
-  the worker is breathing through it. The firmware version is now centralised
-  in `papr_version.h` (currently **v0.7.0**).
+  the worker is breathing through it.
+- **Revision 8** — **Design-for-Manufacture / Design-for-Test** support for
+  mass production with an end-of-line flashing/test station:
+  - **`papr_provision`** stores per-unit identity and calibration (serial,
+    hardware revision, manufacture date, BLE MAC, flow/current calibration)
+    in a dedicated flash page that survives OTA updates. The station writes
+    it; the application reads it at boot.
+  - **`papr_factory`** is a built-in self-test (BIST) + factory command loop.
+    The station asserts a TEST_MODE pad and resets; the firmware then runs
+    BIST over every subsystem and exposes provisioning / actuation / sensor
+    commands over the UART test pads (same framing as BLE). See "Production
+    test" below. The firmware version is centralised in `papr_version.h`
+    (currently **v0.8.0**).
 
-  All revision-1 modules and headers remain in place; revisions 2-7 only
+  All revision-1 modules and headers remain in place; revisions 2-8 only
   added or extended functionality.
 
 ## Layout
@@ -149,6 +160,12 @@ for the remaining 13 of the 64 LQFP positions.
   image in the inactive flash slot via the HAL, verifies a CRC-32 over the
   whole image, and on apply commits a boot flag and resets. Gated so a
   transfer can only begin while the unit is idle.
+- `papr_provision` — per-unit identity + calibration in a dedicated flash
+  page (serial, HW rev, mfg date, BLE MAC, flow/current cal). Written by the
+  production station, read by the application; survives OTA updates.
+- `papr_factory` — end-of-line built-in self-test (BIST) and factory command
+  loop. Entered at boot when the TEST_MODE pad is asserted; talks the same
+  framed protocol as BLE over the UART test pads.
 - `papr_battery`, `papr_sensors`, `papr_alarms` — battery state, environmental
   sensors, alarm latching/rendering.
 - `papr_hal` — vendor-agnostic hardware contract; only exposes raw I²C
@@ -347,6 +364,139 @@ firmware's contract with it is just "write metadata + reset", implemented by
   8 STATE    (wrong state for the command)
   OTA states: 0 IDLE  1 RECEIVING  2 READY  3 ERROR
 ```
+
+## Production test (DFM / DFT, rev 8)
+
+Written for the **manufacturing / test engineer** building the end-of-line
+(EOL) flashing test station. The firmware is designed so one fixture can
+flash, self-test, calibrate, and serialise each unit, and log a structured
+pass/fail record for traceability.
+
+### Board access points (design these into the PCB)
+
+```
+  interface     pins (GD32E517RE)   fixture use
+  ------------  ------------------  -------------------------------------------
+  SWD           PA13 SWDIO          flash bootloader + golden app; debug;
+                PA14 SWCLK          read protection (set after final test)
+  UART pads     PA9  TX / PA10 RX   factory command protocol (BIST, provision,
+                                    actuation) — pogo pads, shared with BLE
+  TEST_MODE     PC12  (pull-up)     fixture pulls LOW + resets -> factory mode
+  BOOT0 strap   BOOT0               recovery: ROM serial bootloader if SWD dead
+  NRST          NRST                fixture-controlled reset
+  power/ICT     VBAT, 3V3, GND      bench supply + rail measurement test points
+```
+
+Lay these out as accessible test pads / a debug connector on the panel, with
+fiducials for the bed-of-nails. Keep TEST_MODE pulled up so a field unit never
+boots into test.
+
+### EOL station sequence
+
+```
+  1. Place panel on bed-of-nails; apply bench supply.
+  2. SWD: flash bootloader @0x08000000 + golden app @0x08008000 (slot A).
+        (CRC/verify the readback.)
+  3. Assert TEST_MODE low, pulse NRST -> unit boots into papr_factory.
+        Unit emits FCT_RSP_INFO unsolicited (booted-into-test handshake).
+  4. FCT_RUN_BIST  -> read pass_mask vs executed_mask + measured values.
+        Fixture also confirms LED/buzzer/BLE optically/acoustically/over-air.
+  5. FCT_WRITE_PROV -> serial (laser-mark to match), hw_rev, mfg_date,
+        BLE MAC, and the flow/current calibration the fixture just measured.
+  6. FCT_READ_PROV  -> verify the record reads back valid (magic+CRC).
+  7. FCT_REBOOT     -> unit resets into the application; final functional
+        check (optional BLE link test from the station).
+  8. SWD: enable flash read-protection / debug lock. Log the record.
+```
+
+### Flash map (with provisioning)
+
+```
+  0x08000000  bootloader        30 KB   validates a slot, rollback
+  0x08007800  provisioning      2 KB    serial / cal / MAC (papr_provision)
+  0x08008000  slot A (app)     240 KB   golden image flashed at production
+  0x08044000  slot B (app)     240 KB   OTA staging in the field
+  0x08080000  (end of 512 KB)
+```
+
+The provisioning page sits in the bootloader region, **outside both app
+slots**, so a field OTA update never erases the unit's identity or
+calibration.
+
+### Built-in self-test (BIST) coverage
+
+`papr_factory_run_bist()` fills a report with an `executed_mask`, a
+`pass_mask`, and measured values for the station log:
+
+```
+  bit     subsystem   check
+  ------  ----------  -------------------------------------------------------
+  0x0001  PROVISION   provisioning page present + valid (warn on blank board)
+  0x0002  BATTERY     pack/bench mV within [10000, 17500]
+  0x0004  TEMP        NTC reads a sane -30..85 C
+  0x0008  SDP810      continuous-mode frame with valid Sensirion CRC
+  0x0010  GDY1124     chip-ID match + a successful compensated read
+  0x0020  BLOWER      spins at test VREF, no L6235 DIAG fault
+  0x0040  TACHO       RPM >= PAPR_FACTORY_BLOWER_MIN_RPM
+  0x0080  FLOW        flow rises above PAPR_FACTORY_FLOW_MIN_LPM when spinning
+  0x0100  KEYPAD      no stuck keys (matrix all-open at rest)
+  0x0200  LED         each LED actuated (fixture verifies optically)
+  0x0400  BUZZER      chirp actuated (fixture verifies acoustically)
+  0x0800  BLE         module reset pulsed (fixture verifies advertising)
+```
+
+A unit passes when `pass_mask == executed_mask`. PROVISION is expected to
+fail on the first pass (the board is not provisioned yet); the station
+provisions, then a re-read (FCT_READ_PROV) confirms it.
+
+### Factory command protocol
+
+Same wire framing as the BLE link — `AA 55 LEN CMD PAYLOAD CRC8`, Sensirion
+CRC-8 — so the fixture can reuse one codec. Spoken over the UART test pads
+while TEST_MODE is asserted.
+
+```
+  CMD   name           payload (station -> unit)   response
+  ----  -------------  --------------------------  --------------------------
+  0xF0  PING           (none)                      0xE0 INFO
+  0xF1  RUN_BIST       (none)                      0xE1 BIST report (20 B)
+  0xF2  READ_PROV      (none)                      0xE2 provisioning blob
+  0xF3  WRITE_PROV     [papr_provision_t]          0xEF STATUS [0 ok]
+  0xF4  SET_OUTPUT     [u8 target][u16 value]      0xEF STATUS
+  0xF5  READ_SENSE     (none)                      0xE3 raw sensor snapshot
+  0xF6  REBOOT         (none)                      0xEF STATUS, then reset
+
+  INFO  (0xE0)  [maj,min,pat, provisioned?, serial[16]]
+  BIST  (0xE1)  [u16 executed][u16 pass][u16 rpm][u16 mA][u16 flow]
+                [i16 dP][u32 baro][u16 battery_mv][i16 temp_c10]
+  SENSE (0xE3)  [u16 flow][u16 batt_mv][u16 batt_mA][u16 rpm][i16 temp_c10]
+  SET_OUTPUT target: 0/1/2 = LED, 3 = buzzer(value=Hz), 4 = blower VREF code
+  STATUS code: 0 ok, 1 bad payload, 2 flash error, 3 CRC error, 0xFF unknown
+```
+
+### Provisioning record (`papr_provision_t`, written by 0xF3)
+
+```
+  off  size  field             notes
+  ---  ----  ----------------  ---------------------------------------------
+   0    4    magic             firmware sets to 'PRPV' (0x50525056)
+   4    2    struct_ver        firmware sets to 1
+   6    2    hw_rev            BCD board rev, e.g. 0x0102 = rev 1.2
+   8   16    serial            ASCII, NUL-padded (match the laser mark)
+  24    4    mfg_date          YYYYMMDD decimal
+  28    6    ble_mac           MAC provisioned into the GD32VW553 module
+  34    2    reserved0
+  36    2    flow_offset_lpm   added to raw flow (per-unit zero)
+  38    2    flow_gain_q8      Q8.8 gain, 256 = 1.0 (per-unit span)
+  40    2    ibat_offset_ma    shunt-amp zero offset
+  42    2    reserved1
+  44    4    crc32             firmware (re)computes on write
+```
+
+The application calls `papr_provision_apply_flow()` /
+`papr_provision_apply_ibat()` so identical firmware yields correct readings
+on units that differ within component tolerance. A blank / invalid record
+falls back to identity calibration, so an unprovisioned board still runs.
 
 ## Mobile App Reference
 
@@ -619,7 +769,7 @@ payload byte:
   |  Breathing       18 /min             |  breaths_per_min
   |  State           RUNNING (3)         |  state
   |  Alarms          0x09                |  alarms (raw hex)
-  |  FW version      0.7.0               |  GET_VERSION ACK payload
+  |  FW version      0.8.0               |  GET_VERSION ACK payload
   |                                      |
   |  [  CLEAR FAULT  ]   (state==FAULT)  |  -> RESET_FAULT (0x05)
   +--------------------------------------+
@@ -632,7 +782,7 @@ payload byte:
   |  < Home               Settings       |
   +--------------------------------------+
   |  Device         PAPR-7F3A            |
-  |  Firmware       v0.7.0               |   <- GET_VERSION
+  |  Firmware       v0.8.0               |   <- GET_VERSION
   |  Telemetry rate 500 ms (read-only)   |
   |                                      |
   |  [   RE-PAIR BLE MODULE   ]          |   (BLE PAIR key is on the unit;
@@ -655,7 +805,7 @@ firmware never decides "newer exists" — it only reports what it runs.
   |  < Settings          Firmware        |      |  < Settings          Firmware        |
   +--------------------------------------+      +--------------------------------------+
   |                                      |      |                                      |
-  |   Installed     v0.7.0               |      |   Updating...   do NOT power off     |
+  |   Installed     v0.8.0               |      |   Updating...   do NOT power off     |
   |   Latest        v0.8.0   (available) |      |                                      |
   |                                      |      |   [##########------]  58 %           |  <- OTA_STATUS.pct
   |   * Update can only run while the    |      |   1.2 MB / 2.0 MB                     |
@@ -757,7 +907,7 @@ All multi-byte integers are little-endian.
    |-------------------------------->|
    |  WRITE GET_VERSION (0x06)       |
    |-------------------------------->|
-   |        ACK [0,7,0]              |
+   |        ACK [0,8,0]              |
    |<--------------------------------|
    |  WRITE GET_TELEMETRY (0x07)     |
    |-------------------------------->|
@@ -838,7 +988,7 @@ All multi-byte integers are little-endian.
 
 ```
   app                                   firmware
-   |  Settings: Installed v0.7.0             |
+   |  Settings: Installed v0.8.0             |
    |  server says latest = v0.8.0            |
    |  ensure device is OFF (STANDBY)         |
    |                                         |

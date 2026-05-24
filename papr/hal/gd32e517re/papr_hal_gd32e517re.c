@@ -791,6 +791,63 @@ void papr_hal_ota_reboot(void)
 }
 
 /* ------------------------------------------------------------------------- */
+/* Production test / provisioning                                            */
+/* ------------------------------------------------------------------------- */
+/*
+ * Provisioning page: the last 2 KB page of the 32 KB bootloader region
+ * (0x08007800). It sits outside both OTA app slots, so a field firmware
+ * update never disturbs the unit's identity or calibration.
+ */
+#define PROV_PAGE_ADDR   0x08007800U
+#define GD32_UID_ADDR    0x1FFFF7E8U   /* 96-bit unique device ID (DBG area) */
+
+bool papr_hal_factory_requested(void)
+{
+    /* Called before papr_hal_init(); bring up just GPIOC and read the pad.
+     * Active-low: a fitted pull-up means an un-probed field unit reads high
+     * and boots the application. */
+    rcu_periph_clock_enable(RCU_GPIOC);
+    gpio_init(PAPR_PIN_TESTMODE_PORT, GPIO_MODE_IPU, GPIO_OSPEED_2MHZ,
+              PAPR_PIN_TESTMODE_PIN);
+    /* Small settle for the pull-up. */
+    for (volatile uint32_t i = 0U; i < 10000U; ++i) { (void)i; }
+    return gpio_input_bit_get(PAPR_PIN_TESTMODE_PORT,
+                              PAPR_PIN_TESTMODE_PIN) == RESET;
+}
+
+void papr_hal_unique_id(uint8_t out[12])
+{
+    if (out == NULL) { return; }
+    const volatile uint8_t *uid = (const volatile uint8_t *)GD32_UID_ADDR;
+    for (uint8_t i = 0U; i < 12U; ++i) { out[i] = uid[i]; }
+}
+
+papr_status_t papr_hal_prov_read(uint8_t *data, uint32_t len)
+{
+    if (data == NULL) { return PAPR_ERR_PARAM; }
+    const uint8_t *src = (const uint8_t *)PROV_PAGE_ADDR;
+    for (uint32_t i = 0U; i < len; ++i) { data[i] = src[i]; }
+    return PAPR_OK;
+}
+
+papr_status_t papr_hal_prov_write(const uint8_t *data, uint32_t len)
+{
+    if (data == NULL || len > OTA_FLASH_PAGE) { return PAPR_ERR_PARAM; }
+    fmc_unlock();
+    papr_status_t rc = PAPR_OK;
+    if (fmc_page_erase(PROV_PAGE_ADDR) != FMC_READY) { rc = PAPR_ERR_HW; }
+    for (uint32_t i = 0U; (rc == PAPR_OK) && (i < len); i += 4U)
+    {
+        uint32_t word = 0xFFFFFFFFU;
+        uint32_t take = ((len - i) >= 4U) ? 4U : (len - i);
+        for (uint32_t b = 0U; b < take; ++b) { ((uint8_t *)&word)[b] = data[i + b]; }
+        if (fmc_word_program(PROV_PAGE_ADDR + i, word) != FMC_READY) { rc = PAPR_ERR_HW; }
+    }
+    fmc_lock();
+    return rc;
+}
+
+/* ------------------------------------------------------------------------- */
 /* Watchdog                                                                  */
 /* ------------------------------------------------------------------------- */
 

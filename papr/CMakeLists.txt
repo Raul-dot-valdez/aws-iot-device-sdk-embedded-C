@@ -28,6 +28,8 @@ add_library(papr_core STATIC
     src/papr_keypad.c
     src/papr_energy.c
     src/papr_ota.c
+    src/papr_provision.c
+    src/papr_factory.c
     src/papr_controller.c
 )
 target_include_directories(papr_core PUBLIC include)

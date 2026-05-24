@@ -297,4 +297,39 @@
 #define PAPR_OTA_REJECT_DOWNGRADE      1
 #endif
 
+/* ---- Production test (Design-for-Test) ------------------------------------
+ * The end-of-line flashing/test station flashes the bootloader + golden app
+ * over SWD, then asserts the TEST_MODE pad and resets. The firmware then runs
+ * the factory command loop (papr_factory) instead of the normal supervisor:
+ * built-in self-test (BIST), per-unit provisioning, and manual actuation for
+ * the fixture. Thresholds below define BIST pass/fail bands. */
+
+/* VREF code used to spin the blower during the BIST blower stage. */
+#ifndef PAPR_FACTORY_BLOWER_TEST_VREF
+#define PAPR_FACTORY_BLOWER_TEST_VREF   (PAPR_L6235_VREF_DAC_MAX / 2U)
+#endif
+
+/* Blower spin-up settling time before reading RPM / flow / current. */
+#ifndef PAPR_FACTORY_BLOWER_SPINUP_MS
+#define PAPR_FACTORY_BLOWER_SPINUP_MS   800U
+#endif
+
+/* Minimum motor RPM (TACHO) for a healthy blower at the test VREF. */
+#ifndef PAPR_FACTORY_BLOWER_MIN_RPM
+#define PAPR_FACTORY_BLOWER_MIN_RPM     4000U
+#endif
+
+/* Minimum airflow expected once the blower is spun up. */
+#ifndef PAPR_FACTORY_FLOW_MIN_LPM
+#define PAPR_FACTORY_FLOW_MIN_LPM       50U
+#endif
+
+/* Acceptable battery / bench-supply window at the station. */
+#ifndef PAPR_FACTORY_BATT_MIN_MV
+#define PAPR_FACTORY_BATT_MIN_MV        10000U
+#endif
+#ifndef PAPR_FACTORY_BATT_MAX_MV
+#define PAPR_FACTORY_BATT_MAX_MV        17500U
+#endif
+
 #endif /* PAPR_CONFIG_H */

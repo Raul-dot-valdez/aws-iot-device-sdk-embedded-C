@@ -298,6 +298,38 @@ void papr_hal_ota_reboot(void)
     (void)s_ota_pending;
 }
 
+/* ---- Production test / provisioning stub ---------------------------------
+ * The host never enters factory mode (would block the simulation in the
+ * command loop). The provisioning page is RAM-backed; unique_id is a fixed
+ * pattern so a host build still produces a deterministic fallback serial. */
+
+static uint8_t s_prov_page[64];
+
+bool papr_hal_factory_requested(void)
+{
+    return false;
+}
+
+void papr_hal_unique_id(uint8_t out[12])
+{
+    if (out == NULL) { return; }
+    for (uint8_t i = 0U; i < 12U; ++i) { out[i] = (uint8_t)(0xA0U + i); }
+}
+
+papr_status_t papr_hal_prov_read(uint8_t *data, uint32_t len)
+{
+    if (data == NULL || len > sizeof(s_prov_page)) { return PAPR_ERR_PARAM; }
+    memcpy(data, s_prov_page, len);
+    return PAPR_OK;
+}
+
+papr_status_t papr_hal_prov_write(const uint8_t *data, uint32_t len)
+{
+    if (data == NULL || len > sizeof(s_prov_page)) { return PAPR_ERR_PARAM; }
+    memcpy(s_prov_page, data, len);
+    return PAPR_OK;
+}
+
 papr_status_t papr_hal_read_battery_mv(uint16_t *out)
 {
     if (out == NULL) { return PAPR_ERR_PARAM; }

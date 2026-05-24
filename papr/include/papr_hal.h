@@ -110,4 +110,20 @@ papr_status_t papr_hal_ota_read(uint32_t offset, uint8_t *data, uint32_t len);
 papr_status_t papr_hal_ota_commit(uint32_t size, uint32_t crc32);
 void          papr_hal_ota_reboot(void);
 
+/* Production test / provisioning (Design-for-Test).
+ *
+ *   factory_requested()  sampled at boot — true when the end-of-line test
+ *                        fixture asserts the TEST_MODE pad. Safe to call
+ *                        before papr_hal_init(); it brings up only what it
+ *                        needs to read the pad.
+ *   unique_id()          MCU die unique ID (12 bytes) — used as a fallback
+ *                        serial for an unprovisioned board.
+ *   prov_read/write()    access the dedicated provisioning flash page (kept
+ *                        separate from the OTA slots so it survives updates).
+ */
+bool          papr_hal_factory_requested(void);
+void          papr_hal_unique_id(uint8_t out[12]);
+papr_status_t papr_hal_prov_read(uint8_t *data, uint32_t len);
+papr_status_t papr_hal_prov_write(const uint8_t *data, uint32_t len);
+
 #endif /* PAPR_HAL_H */

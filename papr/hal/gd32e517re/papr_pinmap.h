@@ -140,4 +140,16 @@
 #define PAPR_PIN_KEYPAD_COL2_PORT    GPIOB
 #define PAPR_PIN_KEYPAD_COL2_PIN     GPIO_PIN_11
 
+/* ---- Production test (DFT) ----------------------------------------------
+ * TEST_MODE pad: a bed-of-nails / pogo test point the end-of-line fixture
+ * pulls LOW to make the firmware boot into the factory command loop. Idle-
+ * high via the internal pull-up so the field unit always boots the app.
+ * PC12 is brought to a dedicated test pad next to the SWD header. */
+#define PAPR_PIN_TESTMODE_PORT       GPIOC
+#define PAPR_PIN_TESTMODE_PIN        GPIO_PIN_12
+
+/* The functional-test transport reuses the BLE UART (PA9/PA10) on test pads;
+ * SWD (PA13/PA14) is the flashing interface. Both are documented in
+ * ARCHITECTURE.md "Production / test access". */
+
 #endif /* PAPR_PINMAP_GD32E517RE_H */

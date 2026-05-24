@@ -57,30 +57,28 @@ directly beneath; **only the HAL touches MCU registers**.
 
 ```
   +-------------------------------------------------------------+
-  |  ENTRY            main.c                                     |
-  |                   `for(;;) papr_controller_step()`          |
-  +------------------------------+------------------------------+
-                                 |
-  +------------------------------v------------------------------+
-  |  SUPERVISOR       papr_controller                           |
-  |                   state machine, scheduling, telemetry,     |
-  |                   remote-request latching                   |
-  +--+---------+---------+---------+---------+---------+----+----+
-     |         |         |         |         |         |    |
-  +--v---------v---------v---------v---------v---------v----v----+
-  |APP / DOMAIN MODULES (portable, no register access)          |
-  | blower battery sensors alarms energy keypad ble ota         |
-  +--+------+----+------+---------------------------+-+----+-----+
-     |           |      |                           | |    | (flash)
-  +--v--+   (adc)|   +--v-----+  +-----------+       | |    |
-  |CHIP |        |   | SDP810 |  | GDY1124   |       | |    |
-  |DRV  |        |   | driver |  | driver    |       | |    |
-  | l6235        |   +---+----+  +----+------+       | |    |
-  +--+--+        |       |            |              | |    |
-     |           |       |            |   (uart,gpio)| |    |
-  +--v-----------v-------v------------v--------------v-v----v----+
-  |  HAL contract     papr_hal.h  (pure function declarations)  |
-  +------------------------------+------------------------------+
+  |  ENTRY            main.c   factory_requested() ? test : app |
+  +----------------+--------------------------+-----------------+
+                   | app                      | EOL fixture
+  +----------------v-------------+   +---------v-----------------+
+  |  SUPERVISOR  papr_controller |   | papr_factory (alt. mode)  |
+  |  state machine, scheduling,  |   | BIST + provisioning +     |
+  |  telemetry, remote latching  |   | actuation over UART pads  |
+  +--+----+----+----+----+--+--+-+   +-----+----------+----------+
+     |    |    |    |    |  |  |            | (uses sensors/      |
+  +--v----v----v----v----v--v--v------------v  drivers + HAL)     |
+  |APP / DOMAIN MODULES (portable, no register access)           |
+  | blower battery sensors alarms energy keypad ble ota provision|
+  +--+------+----+------+----------------------+-+----+----+------+
+     |           |      |                       | |    |    | (flash:
+  +--v--+   (adc)|   +--v-----+  +-----------+   | |    |    |  ota +
+  |CHIP |        |   | SDP810 |  | GDY1124   |   | |    |    |  prov)
+  |DRV  |        |   | driver |  | driver    |   | |    |    |
+  | l6235        |   +---+----+  +----+------+   | |    |    |
+  +--+--+        |       |            | (uart,gpio)|    |    |
+  +--v-----------v-------v------------v-----------v-v----v----v----+
+  |  HAL contract     papr_hal.h  (pure function declarations)    |
+  +------------------------------+-------------------------------+
                                  |
         +------------------------+------------------------+
         |                                                 |
@@ -150,13 +148,15 @@ hardware to `l6235`; `energy` is a pure algorithm over values handed to it.
   startup_gd32e51x.s  (vendor)  -> SystemInit() -> main()
     |
     v
-  papr_controller_init()
-    |  papr_hal_init()            bring up clocks, GPIO, DAC, ADC, I2C,
-    |                             timers, USART, keypad, watchdog
-    |  blower/battery/sensors/alarms init
-    |  ble_init  (best effort)    pulse module reset, start RX
-    |  keypad_init / energy_init
-    |  state = INIT
+  papr_hal_factory_requested()?  (reads TEST_MODE pad, pre-init safe)
+    |                        \
+    | no (field unit)         \ yes (EOL fixture)
+    v                          v
+  papr_controller_init()     papr_hal_init() ; papr_factory_main()
+    |  papr_hal_init()           |  BIST + provisioning + actuation over
+    |  blower/battery/sensors    |  the UART test pads; FCT_REBOOT resets
+    |  alarms/ble/keypad/energy  |  into the application. (sec. 11)
+    |  ota init ; state = INIT
     v
   +-------------------------------------------------------+
   |  for (;;) papr_controller_step()                      |
@@ -165,6 +165,7 @@ hardware to `l6235`; `energy` is a pure algorithm over values handed to it.
   |   2. sensors + battery    if >= 20 ms                 |
   |   3. dispatch_keys        keypad scan (self-paced 8ms)|
   |   4. ble_poll             drain RX, telemetry @ 500ms |
+  |      (also handles OTA command frames)                |
   |   5. apply_remote_requests latched BLE commands       |
   |   6. energy_update        every tick                  |
   |   7. auto-level apply      if auto mode on            |
@@ -332,6 +333,19 @@ Each entry: role, primary type, who owns it, and its HAL surface.
 |   type: papr_ota_t         HAL: ota_slot_size, ota_erase, ota_write,      |
 |                                 ota_read, ota_commit, ota_reboot, wdt_kick|
 +---------------------------------------------------------------------------+
+| papr_provision             owner: app sensor path + papr_factory         |
+|   Per-unit identity + calibration in a dedicated flash page (serial, HW   |
+|   rev, mfg date, BLE MAC, flow/current cal). CRC-guarded; survives OTA.    |
+|   type: papr_provision_t   HAL: prov_read, prov_write, unique_id          |
++---------------------------------------------------------------------------+
+| papr_factory               owner: main.c (alternate boot mode)           |
+|   End-of-line BIST + factory command loop over the UART test pads (BLE    |
+|   framing). Drives every subsystem via the HAL, returns pass/fail + cal   |
+|   measurements, reads/writes provisioning. Entered only when TEST_MODE    |
+|   is asserted at boot.                                                     |
+|   types: papr_bist_report_t  HAL: every actuation/read group + uart +     |
+|                                   prov + ota_reboot                       |
++---------------------------------------------------------------------------+
 ```
 
 Leaf headers (no logic):
@@ -368,6 +382,7 @@ declaration in `papr_hal.h`; the entire stack above compiles unchanged.
    safety      wdt_kick
    ota/flash   ota_slot_size / ota_erase / ota_write / ota_read /
                ota_commit / ota_reboot
+   test/prov   factory_requested / unique_id / prov_read / prov_write
    lifecycle   init
 
   Two implementations ship:
@@ -408,13 +423,15 @@ flash erase/verify kick the watchdog directly, and an apply resets the MCU.
 
 ```
   GD32E517RE flash, 512 KB
-  0x08000000  +-------------------+  bootloader (32 KB) — validates a slot,
+  0x08000000  +-------------------+  bootloader (30 KB) — validates a slot,
               |  bootloader       |   rolls back on a failed boot. Separate
-  0x08008000  +-------------------+   deliverable; firmware only writes the
-              |  slot A (app)     |   boot metadata + resets.
-              |   240 KB          |
-              |   [.. meta page]  |  last 2 KB page: MAGIC | size | crc32
-  0x08044000  +-------------------+
+  0x08007800  +-------------------+   deliverable; firmware only writes the
+              |  provisioning 2KB |   boot metadata + resets.
+  0x08008000  +-------------------+  provisioning: serial/cal/MAC, written by
+              |  slot A (app)     |   the EOL station, OUTSIDE the slots so an
+              |   240 KB          |   OTA never erases unit identity (papr_
+              |   [.. meta page]  |   provision). last 2 KB of each slot:
+  0x08044000  +-------------------+   MAGIC | size | crc32 boot metadata.
               |  slot B (app)     |  the running image lives in one slot;
               |   240 KB          |  papr_ota stages the new image into the
               |   [.. meta page]  |  OTHER slot (chosen from SCB->VTOR).
@@ -452,7 +469,7 @@ flash erase/verify kick the watchdog directly, and an apply resets the MCU.
     output : flashable ELF (GD-Link / J-Link / OpenOCD)
 
   papr_core  =  blower battery sensors alarms l6235 sdp810 gdy1124
-                ble keypad energy ota controller
+                ble keypad energy ota provision factory controller
 ```
 
 ---
@@ -472,13 +489,15 @@ flash erase/verify kick the watchdog directly, and an apply resets the MCU.
   |    papr_battery.h papr_sensors.h
   |    papr_sdp810.h papr_gdy1124.h                   (sensor drivers)
   |    papr_alarms.h papr_energy.h papr_keypad.h papr_ble.h papr_ota.h
+  |    papr_provision.h papr_factory.h                (DFM / DFT)
   |- src/
-  |    main.c            <entry>
+  |    main.c            <entry: app vs factory mode>
   |    papr_controller.c <supervisor>
   |    papr_blower.c papr_l6235.c
   |    papr_battery.c papr_sensors.c
   |    papr_sdp810.c papr_gdy1124.c
   |    papr_alarms.c papr_energy.c papr_keypad.c papr_ble.c papr_ota.c
+  |    papr_provision.c papr_factory.c
   |- hal/
        papr_hal_stub.c               (HOST)
        gd32e517re/
@@ -498,6 +517,7 @@ flash erase/verify kick the watchdog directly, and an apply resets the MCU.
   BLE wire protocol ............ README.md  "BLE wireless control"
   mobile app screens/use cases . README.md  "Mobile App Reference"
   OTA update flow .............. README.md  "OTA firmware update"
+  production test / station .... README.md  "Production test (DFM / DFT)"
   safety caveats ............... README.md  "Safety notes"
 ```
 
