@@ -19,7 +19,7 @@ enum
 };
 
 #define VERSION_MAJOR  0
-#define VERSION_MINOR  5    /* tracks the firmware revision number */
+#define VERSION_MINOR  6    /* tracks the firmware revision number */
 #define VERSION_PATCH  0
 
 /* ---- Frame helpers ------------------------------------------------------- */
