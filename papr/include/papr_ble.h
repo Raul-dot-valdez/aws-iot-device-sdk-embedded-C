@@ -47,10 +47,19 @@ typedef enum
     PAPR_BLE_CMD_GET_TELEMETRY  = 0x07U,
     PAPR_BLE_CMD_SET_AUTO_MODE  = 0x08U,    /* payload: [u8 enable] */
 
+    /* OTA firmware update. See papr_ota.h and the README "OTA" section. */
+    PAPR_BLE_CMD_OTA_BEGIN      = 0x09U,    /* [u32 size][u32 crc32][u8 maj,min,pat] */
+    PAPR_BLE_CMD_OTA_DATA       = 0x0AU,    /* [u32 offset][image bytes ...]         */
+    PAPR_BLE_CMD_OTA_END        = 0x0BU,    /* (none) -> verify CRC                  */
+    PAPR_BLE_CMD_OTA_APPLY      = 0x0CU,    /* (none) -> commit + reboot             */
+    PAPR_BLE_CMD_OTA_ABORT      = 0x0DU,    /* (none)                                */
+    PAPR_BLE_CMD_OTA_STATUS     = 0x0EU,    /* (none) -> OTA_STATUS notify           */
+
     PAPR_BLE_NTF_TELEMETRY      = 0x80U,
     PAPR_BLE_NTF_ACK            = 0x81U,
     PAPR_BLE_NTF_NACK           = 0x82U,
-    PAPR_BLE_NTF_EVENT          = 0x83U
+    PAPR_BLE_NTF_EVENT          = 0x83U,
+    PAPR_BLE_NTF_OTA_STATUS     = 0x84U     /* [u8 state][u8 err][u8 pct][u8 maj,min,pat] */
 } papr_ble_msg_t;
 
 typedef enum

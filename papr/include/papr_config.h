@@ -166,9 +166,10 @@
 #define PAPR_BLE_TELEM_PERIOD_MS        500U
 #endif
 
-/* Largest payload a single frame may carry. */
+/* Largest payload a single frame may carry. Sized to fit an OTA data chunk
+ * (4-byte offset + image bytes) inside one BLE 5.x DLE PDU. */
 #ifndef PAPR_BLE_MAX_PAYLOAD
-#define PAPR_BLE_MAX_PAYLOAD            64U
+#define PAPR_BLE_MAX_PAYLOAD            128U
 #endif
 
 /* Frame-sync bytes. Two-byte preamble keeps the module's UART from
@@ -262,6 +263,38 @@
 /* Watchdog kick interval. Must be shorter than the hardware watchdog window. */
 #ifndef PAPR_WDT_KICK_MS
 #define PAPR_WDT_KICK_MS                100U
+#endif
+
+/* ---- OTA firmware update --------------------------------------------------
+ * Images are streamed over BLE into the inactive application flash slot,
+ * verified by CRC-32, then a boot flag is set and the MCU resets so a
+ * (separate) bootloader runs the new image. Updates are only accepted while
+ * the device is idle (STANDBY) — never while the worker is breathing through
+ * the unit. See ARCHITECTURE.md "OTA flash map" for the slot layout. */
+
+/* Usable capacity of the staging slot (inactive app bank). The reference
+ * GD32E517RE map reserves 32 KB bootloader + 2 x 240 KB app slots. */
+#ifndef PAPR_OTA_SLOT_SIZE
+#define PAPR_OTA_SLOT_SIZE              (240U * 1024U)
+#endif
+
+/* Maximum image payload bytes carried by one OTA_DATA frame (the rest of the
+ * BLE payload is the 4-byte image offset). */
+#ifndef PAPR_OTA_CHUNK_MAX
+#define PAPR_OTA_CHUNK_MAX              (PAPR_BLE_MAX_PAYLOAD - 4U)
+#endif
+
+/* Flash programming granularity in bytes. OTA_DATA offsets / lengths must be
+ * a multiple of this (4 = word programming on the GD32 FMC). */
+#ifndef PAPR_OTA_WRITE_ALIGN
+#define PAPR_OTA_WRITE_ALIGN           4U
+#endif
+
+/* If set, OTA_BEGIN rejects an image whose version is older than the running
+ * firmware (anti-downgrade). Equal versions are allowed so a re-flash / repair
+ * is still possible. */
+#ifndef PAPR_OTA_REJECT_DOWNGRADE
+#define PAPR_OTA_REJECT_DOWNGRADE      1
 #endif
 
 #endif /* PAPR_CONFIG_H */

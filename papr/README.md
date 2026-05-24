@@ -38,8 +38,16 @@ Reference firmware for a Powered Air-Purifying Respirator (PAPR) running on
     press / release / long-press edges, and an event FIFO. POWER requires
     a long-press to actually start or stop the blower, preventing
     accidental power-off while wearing the hood.
+- **Revision 7** — **OTA firmware update** (`papr_ota`) plus the supporting
+  mobile-app flow. The app streams a new image over BLE into the inactive
+  flash slot; the firmware verifies it with CRC-32, then sets a boot flag and
+  resets so a bootloader runs the new image (with rollback). The running
+  version is reported over BLE so users can check whether they are up to date.
+  Updates are accepted **only while the unit is idle (STANDBY)** — never while
+  the worker is breathing through it. The firmware version is now centralised
+  in `papr_version.h` (currently **v0.7.0**).
 
-  All revision-1 modules and headers remain in place; revisions 2-6 only
+  All revision-1 modules and headers remain in place; revisions 2-7 only
   added or extended functionality.
 
 ## Layout
@@ -137,6 +145,10 @@ for the remaining 13 of the 64 LQFP positions.
   breathing rate / amplitude, recommends a flow level for auto mode,
   runs a coulomb counter for "minutes remaining", and smooths the
   worker's session lengths with an EWMA.
+- `papr_ota` — over-the-air firmware update receiver. Stages an incoming
+  image in the inactive flash slot via the HAL, verifies a CRC-32 over the
+  whole image, and on apply commits a boot flag and resets. Gated so a
+  transfer can only begin while the unit is idle.
 - `papr_battery`, `papr_sensors`, `papr_alarms` — battery state, environmental
   sensors, alarm latching/rendering.
 - `papr_hal` — vendor-agnostic hardware contract; only exposes raw I²C
@@ -207,15 +219,22 @@ Mobile → device commands:
 | 0x06 | GET_VERSION    | empty                                 |
 | 0x07 | GET_TELEMETRY  | empty                                 |
 | 0x08 | SET_AUTO_MODE  | `[u8 enable]` (0=manual, 1=adaptive)  |
+| 0x09 | OTA_BEGIN      | `[u32 size][u32 crc32][u8 maj,min,pat]` |
+| 0x0A | OTA_DATA       | `[u32 offset][image bytes…]`          |
+| 0x0B | OTA_END        | empty (verify CRC)                    |
+| 0x0C | OTA_APPLY      | empty (commit + reboot)               |
+| 0x0D | OTA_ABORT      | empty                                 |
+| 0x0E | OTA_STATUS     | empty (request status)                |
 
 Device → mobile notifications:
 
 | Code | Name           | Payload                               |
 | ---- | -------------- | ------------------------------------- |
-| 0x80 | TELEMETRY      | packed 28-byte telemetry struct       |
+| 0x80 | TELEMETRY      | packed 29-byte telemetry struct       |
 | 0x81 | ACK            | `[u8 cmd]`                            |
 | 0x82 | NACK           | `[u8 cmd, u8 reason]`                 |
 | 0x83 | EVENT          | `[u8 event_type, …]`                  |
+| 0x84 | OTA_STATUS     | `[u8 state, u8 error, u8 pct, u8 maj,min,pat]` |
 
 Telemetry is broadcast every `PAPR_BLE_TELEM_PERIOD_MS` (500 ms by
 default) and on every state, level, or alarm-mask change. The telemetry
@@ -272,7 +291,64 @@ When the user enables auto mode (MODE key or BLE `SET_AUTO_MODE` 1):
    session length so the mobile app can warn early when the budget runs
    short of their usual shift duration.
 
-## Mobile App Reference (rev 7)
+## OTA firmware update (rev 7)
+
+Workers (or a supervisor via the mobile app) can check the installed firmware
+version and update it wirelessly. The design favours safety and recoverability
+over speed.
+
+### Flash map (GD32E517RE, 512 KB)
+
+```
+  0x08000000  +-------------------+
+              | bootloader  32 KB |  validates + selects a slot, rollback
+  0x08008000  +-------------------+
+              | slot A (app)      |  240 KB  --- one slot runs,
+              |  ... + meta page  |              the other is the OTA target
+  0x08044000  +-------------------+
+              | slot B (app)      |  240 KB
+              |  ... + meta page  |
+  0x08080000  +-------------------+
+```
+
+The HAL stages the image into whichever slot is **not** running (chosen from
+`SCB->VTOR`). The last 2 KB page of each slot holds boot metadata
+(`MAGIC | size | crc32`). The bootloader itself is a separate deliverable; the
+firmware's contract with it is just "write metadata + reset", implemented by
+`papr_hal_ota_commit()` / `papr_hal_ota_reboot()`.
+
+### Update flow & safety
+
+```
+  OTA_BEGIN  --> papr_ota_begin   (idle? size ok? not a downgrade?) erase slot
+  OTA_DATA*  --> papr_ota_write   sequential, word-aligned chunks -> flash
+  OTA_END    --> papr_ota_finish  read back, CRC-32 over whole image
+  OTA_APPLY  --> papr_ota_apply   commit boot meta, then MCU reset
+  OTA_ABORT  --> papr_ota_abort   back to IDLE at any time
+```
+
+- **Idle-only:** `OTA_BEGIN` is rejected unless the supervisor is in STANDBY,
+  and the blower cannot be started while a transfer is in progress.
+- **Anti-downgrade:** images older than the running version are rejected
+  (`PAPR_OTA_REJECT_DOWNGRADE`, equal versions allowed for re-flash).
+- **Integrity:** the whole image is CRC-32 verified from flash before it can
+  be applied; a bad CRC leaves the running image untouched.
+- **Recoverability:** the active image is never erased — only the inactive
+  slot — so a failed or interrupted update cannot brick the device; the
+  bootloader rolls back if the new image fails to boot.
+- **CRC-32** is the standard reflected zlib/Ethernet variant so the app can
+  precompute it with any stock library.
+
+### OTA error codes (in OTA_STATUS.error)
+
+```
+  0 NONE     1 BUSY (not idle)   2 SIZE (too big)   3 SEQUENCE (bad offset)
+  4 ALIGN    5 FLASH             6 CRC mismatch     7 VERSION (downgrade)
+  8 STATE    (wrong state for the command)
+  OTA states: 0 IDLE  1 RECEIVING  2 READY  3 ERROR
+```
+
+## Mobile App Reference
 
 This section is written for the **app developer**. It specifies every screen,
 the data each screen reads, the commands each control sends, and the end-to-end
@@ -361,6 +437,12 @@ payload byte:
                          +------------------+
                          |   8. SETTINGS    |
                          |   / about        |
+                         +--------+---------+
+                                  | "Check for updates"
+                                  v
+                         +------------------+
+                         |   9. UPDATE      |
+                         |   (OTA)          |
                          +------------------+
 
   A FAULT event (or state == FAULT) pops a modal over any screen
@@ -537,7 +619,7 @@ payload byte:
   |  Breathing       18 /min             |  breaths_per_min
   |  State           RUNNING (3)         |  state
   |  Alarms          0x09                |  alarms (raw hex)
-  |  FW version      0.6.0               |  GET_VERSION ACK payload
+  |  FW version      0.7.0               |  GET_VERSION ACK payload
   |                                      |
   |  [  CLEAR FAULT  ]   (state==FAULT)  |  -> RESET_FAULT (0x05)
   +--------------------------------------+
@@ -550,7 +632,7 @@ payload byte:
   |  < Home               Settings       |
   +--------------------------------------+
   |  Device         PAPR-7F3A            |
-  |  Firmware       v0.6.0               |   <- GET_VERSION
+  |  Firmware       v0.7.0               |   <- GET_VERSION
   |  Telemetry rate 500 ms (read-only)   |
   |                                      |
   |  [   RE-PAIR BLE MODULE   ]          |   (BLE PAIR key is on the unit;
@@ -558,7 +640,47 @@ payload byte:
   |                                      |    re-scans)
   |  [   FORGET DEVICE        ]          |
   |  [   CLEAR FAULT          ]          |   -> RESET_FAULT (0x05)
+  |  [   CHECK FOR UPDATES   >]          |   -> Update screen (9)
   +--------------------------------------+
+```
+
+### 9. Update (OTA)
+
+The app compares the device's running version (GET_VERSION / OTA_STATUS)
+against the latest image it can fetch from the vendor's update server. The
+firmware never decides "newer exists" — it only reports what it runs.
+
+```
+  +--------------------------------------+      +--------------------------------------+
+  |  < Settings          Firmware        |      |  < Settings          Firmware        |
+  +--------------------------------------+      +--------------------------------------+
+  |                                      |      |                                      |
+  |   Installed     v0.7.0               |      |   Updating...   do NOT power off     |
+  |   Latest        v0.8.0   (available) |      |                                      |
+  |                                      |      |   [##########------]  58 %           |  <- OTA_STATUS.pct
+  |   * Update can only run while the    |      |   1.2 MB / 2.0 MB                     |
+  |     unit is OFF (standby).           |      |                                      |
+  |                                      |      |   Stay close to the unit.            |
+  |   [   DOWNLOAD & INSTALL   ]         |      |   [   CANCEL   ]                      |  -> OTA_ABORT (0x0D)
+  +--------------------------------------+      +--------------------------------------+
+        (a) idle / up-to-date or available             (b) transfer in progress
+
+  +--------------------------------------+      +--------------------------------------+
+  |  < Settings          Firmware        |      |  Firmware update                     |
+  +--------------------------------------+      +--------------------------------------+
+  |   Verified OK.  Ready to install.    |      |   [!] Update failed                  |
+  |                                      |      |       reason: CRC mismatch (6)        |  <- OTA_STATUS.error
+  |   The unit will restart to finish.   |      |                                      |
+  |                                      |      |   The current firmware is unchanged. |
+  |   [   RESTART & APPLY   ]            |      |   [   TRY AGAIN   ]                   |
+  +--------------------------------------+      +--------------------------------------+
+        (c) staged & verified (state READY)            (d) error (state ERROR)
+
+  Preconditions enforced by firmware (surface them in the UI):
+   - Device must be in STANDBY: if not, OTA_BEGIN -> OTA_STATUS error 1 (BUSY).
+     Prompt "Turn the unit off to update."
+   - Image must not be a downgrade: error 7 (VERSION).
+   - Image must fit the slot (<= ~238 KB usable): error 2 (SIZE).
 ```
 
 ### Telemetry payload byte map (CMD 0x80, LEN = 29)
@@ -600,6 +722,15 @@ All multi-byte integers are little-endian.
   0x06  GET_VERSION     (none)                  ACK 0x81 [maj,min,pat]
   0x07  GET_TELEMETRY   (none)                  TELEMETRY 0x80 [..29..]
   0x08  SET_AUTO_MODE   [u8 0|1]                ACK 0x81 [0x08]
+  0x09  OTA_BEGIN       [u32 size][u32 crc32]   OTA_STATUS 0x84
+                        [u8 maj,min,pat]          (state=RECEIVING or error)
+  0x0A  OTA_DATA        [u32 off][bytes..124]   ACK 0x81 [0x0A] (per chunk)
+                                                  or OTA_STATUS on error
+  0x0B  OTA_END         (none)                  OTA_STATUS 0x84 (READY|error)
+  0x0C  OTA_APPLY       (none)                  ACK on wire, then reboot
+                                                  (OTA_STATUS if not READY)
+  0x0D  OTA_ABORT       (none)                  OTA_STATUS 0x84 (IDLE)
+  0x0E  OTA_STATUS      (none)                  OTA_STATUS 0x84
 
   Unsolicited from firmware:
   0x80  TELEMETRY       [29 bytes]              every 500 ms + on change
@@ -608,6 +739,10 @@ All multi-byte integers are little-endian.
           type 0x02 ALARM_CHANGE  [u32 LE mask]
           type 0x03 LEVEL_CHANGE  [u8 level]
           type 0x04 FAULT         [..]
+  0x84  OTA_STATUS      [u8 state, u8 error, u8 pct, u8 maj, u8 min, u8 pat]
+          state  0 IDLE  1 RECEIVING  2 READY  3 ERROR
+          error  0 NONE 1 BUSY 2 SIZE 3 SEQUENCE 4 ALIGN 5 FLASH
+                 6 CRC 7 VERSION 8 STATE
 
   Errors:
   0x82  NACK            [u8 cmd, u8 reason]
@@ -622,7 +757,7 @@ All multi-byte integers are little-endian.
    |-------------------------------->|
    |  WRITE GET_VERSION (0x06)       |
    |-------------------------------->|
-   |        ACK [0,6,0]              |
+   |        ACK [0,7,0]              |
    |<--------------------------------|
    |  WRITE GET_TELEMETRY (0x07)     |
    |-------------------------------->|
@@ -699,6 +834,53 @@ All multi-byte integers are little-endian.
   no-op that still returns ACK.
 ```
 
+### Use case E — OTA firmware update
+
+```
+  app                                   firmware
+   |  Settings: Installed v0.7.0             |
+   |  server says latest = v0.8.0            |
+   |  ensure device is OFF (STANDBY)         |
+   |                                         |
+   |  WRITE OTA_BEGIN [size, crc32, 0,8,0]   |
+   |---------------------------------------->|  reject if running, downgrade,
+   |        OTA_STATUS state=RECEIVING err=0 |  or too big -> err 1/7/2
+   |<----------------------------------------|
+   |                                         |
+   |  loop over image in <=124-byte chunks:  |
+   |   WRITE OTA_DATA [off=0,    bytes]       |
+   |---------------------------------------->|  program flash @ off
+   |        ACK [0x0A]                        |
+   |<----------------------------------------|
+   |   WRITE OTA_DATA [off=124,  bytes]       |
+   |---------------------------------------->|
+   |        ACK [0x0A]                        |   (update progress bar from
+   |<----------------------------------------|    off/size; or poll OTA_STATUS)
+   |   ... until all bytes sent ...           |
+   |                                         |
+   |  WRITE OTA_END                          |
+   |---------------------------------------->|  read back, CRC-32 whole image
+   |        OTA_STATUS state=READY err=0      |  (err=6 CRC if mismatch)
+   |<----------------------------------------|
+   |                                         |
+   |  user taps RESTART & APPLY              |
+   |  WRITE OTA_APPLY                        |
+   |---------------------------------------->|  commit boot meta
+   |        ACK [0x0C]   (flushed first)     |
+   |<----------------------------------------|
+   |                                  < MCU resets; bootloader runs new image >
+   |  BLE drops; app shows "restarting"      |
+   |  reconnect, GET_VERSION                 |
+   |---------------------------------------->|
+   |        ACK [0,8,0]   (now up to date)   |
+   |<----------------------------------------|
+
+  Chunk pacing: send the next OTA_DATA only after the previous ACK (simple
+  stop-and-wait) — robust and easily fast enough over BLE. On any OTA_STATUS
+  with err != 0, stop and surface it; the running firmware is untouched, so
+  the user can simply retry. CANCEL at any time -> OTA_ABORT.
+```
+
 ### Robustness rules for the app
 
 ```
@@ -710,6 +892,10 @@ All multi-byte integers are little-endian.
   - Never block the safety path: the unit runs and alarms locally with or
     without a phone connected. The app is an accessory, not a controller of
     last resort.
+  - OTA: precompute the CRC-32 (zlib/Ethernet variant) over the exact image
+    bytes; send word-aligned, sequential chunks; keep the phone near the unit
+    and the screen awake during transfer. Expect the BLE link to drop at
+    OTA_APPLY (the MCU resets) and auto-reconnect to confirm the new version.
 ```
 
 ## Safety notes

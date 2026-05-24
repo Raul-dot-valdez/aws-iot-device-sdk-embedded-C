@@ -111,6 +111,7 @@ papr_status_t papr_controller_init(papr_controller_t *c)
 
     (void)papr_keypad_init(&c->keypad);
     (void)papr_energy_init(&c->energy);
+    (void)papr_ota_init(&c->ota);
 
     c->rc_power_on_pending    = false;
     c->rc_power_off_pending   = false;
@@ -139,7 +140,8 @@ static void handle_key_event(papr_controller_t *c,
         {
             enter_state(c, PAPR_STATE_SHUTDOWN);
         }
-        else if (c->state == PAPR_STATE_STANDBY)
+        else if (c->state == PAPR_STATE_STANDBY &&
+                 !papr_ota_in_progress(&c->ota))
         {
             apply_level(c);
             (void)papr_blower_start(&c->blower);
@@ -238,7 +240,7 @@ static void apply_remote_requests(papr_controller_t *c, uint32_t now)
     if (c->rc_power_on_pending)
     {
         c->rc_power_on_pending = false;
-        if (c->state == PAPR_STATE_STANDBY)
+        if (c->state == PAPR_STATE_STANDBY && !papr_ota_in_progress(&c->ota))
         {
             apply_level(c);
             (void)papr_blower_start(&c->blower);
@@ -461,4 +463,60 @@ void papr_controller_remote_set_auto(papr_controller_t *c, bool enabled)
 {
     if (c == NULL) { return; }
     papr_energy_set_auto(&c->energy, enabled);
+}
+
+papr_ota_error_t papr_controller_ota_begin(papr_controller_t *c,
+                                           uint32_t image_size,
+                                           uint32_t image_crc32,
+                                           papr_fw_version_t incoming)
+{
+    if (c == NULL) { return PAPR_OTA_ERR_STATE; }
+    /* Idle == standby. Refuse while running, in alarm, self-test, etc. */
+    bool idle = (c->state == PAPR_STATE_STANDBY);
+    return papr_ota_begin(&c->ota, image_size, image_crc32, incoming, idle);
+}
+
+papr_ota_error_t papr_controller_ota_write(papr_controller_t *c,
+                                           uint32_t offset,
+                                           const uint8_t *data, uint16_t len)
+{
+    if (c == NULL) { return PAPR_OTA_ERR_STATE; }
+    return papr_ota_write(&c->ota, offset, data, len);
+}
+
+papr_ota_error_t papr_controller_ota_finish(papr_controller_t *c)
+{
+    if (c == NULL) { return PAPR_OTA_ERR_STATE; }
+    return papr_ota_finish(&c->ota);
+}
+
+papr_ota_error_t papr_controller_ota_apply(papr_controller_t *c)
+{
+    if (c == NULL) { return PAPR_OTA_ERR_STATE; }
+    papr_ota_error_t e = papr_ota_apply(&c->ota);
+    if (e == PAPR_OTA_ERR_NONE)
+    {
+        /* Park the blower (should already be stopped in standby) and reset
+         * into the bootloader, which runs the freshly staged image. */
+        (void)papr_blower_stop(&c->blower);
+        papr_hal_ota_reboot();   /* no return on real hardware */
+    }
+    return e;
+}
+
+void papr_controller_ota_abort(papr_controller_t *c)
+{
+    if (c == NULL) { return; }
+    papr_ota_abort(&c->ota);
+}
+
+void papr_controller_ota_status(const papr_controller_t *c,
+                                uint8_t *out_state,
+                                uint8_t *out_error,
+                                uint8_t *out_percent)
+{
+    if (c == NULL) { return; }
+    if (out_state)   { *out_state   = (uint8_t)c->ota.state; }
+    if (out_error)   { *out_error   = (uint8_t)c->ota.error; }
+    if (out_percent) { *out_percent = papr_ota_progress_percent(&c->ota); }
 }

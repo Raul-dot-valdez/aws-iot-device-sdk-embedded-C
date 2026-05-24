@@ -65,20 +65,20 @@ directly beneath; **only the HAL touches MCU registers**.
   |  SUPERVISOR       papr_controller                           |
   |                   state machine, scheduling, telemetry,     |
   |                   remote-request latching                   |
-  +--+---------+---------+---------+---------+---------+---------+
-     |         |         |         |         |         |
-  +--v--+  +---v---+ +---v---+ +---v---+ +---v----+ +--v-----+
-  |APP / DOMAIN MODULES (portable, no register access)         |
-  | blower  battery  sensors  alarms  energy  keypad  ble      |
-  +--+------+----+------+---------------------------+-+---------+
-     |           |      |                           | |
-  +--v--+   (adc)|   +--v-----+  +-----------+       | | (uart, gpio)
-  |CHIP |        |   | SDP810 |  | GDY1124   |       | |
-  |DRV  |        |   | driver |  | driver    |       | |
-  | l6235        |   +---+----+  +----+------+       | |
-  +--+--+        |       |            |              | |
-     |           |       |            |              | |
-  +--v-----------v-------v------------v--------------v-v---------+
+  +--+---------+---------+---------+---------+---------+----+----+
+     |         |         |         |         |         |    |
+  +--v---------v---------v---------v---------v---------v----v----+
+  |APP / DOMAIN MODULES (portable, no register access)          |
+  | blower battery sensors alarms energy keypad ble ota         |
+  +--+------+----+------+---------------------------+-+----+-----+
+     |           |      |                           | |    | (flash)
+  +--v--+   (adc)|   +--v-----+  +-----------+       | |    |
+  |CHIP |        |   | SDP810 |  | GDY1124   |       | |    |
+  |DRV  |        |   | driver |  | driver    |       | |    |
+  | l6235        |   +---+----+  +----+------+       | |    |
+  +--+--+        |       |            |              | |    |
+     |           |       |            |   (uart,gpio)| |    |
+  +--v-----------v-------v------------v--------------v-v----v----+
   |  HAL contract     papr_hal.h  (pure function declarations)  |
   +------------------------------+------------------------------+
                                  |
@@ -110,28 +110,31 @@ chip drivers.
 
 ```
                           papr_controller_t
-   +----------+----------+-----+------+------+--------+--------+
-   ||         ||         ||    ||     ||     ||       ||
-   v|         v|         v|    v|     v|     v|       v|
-  blower    battery   sensors alarms energy keypad   ble
-   ||                  ||  ||                         |
-   v|                  v|  v|                         | calls
-  l6235               sdp810 gdy1124                  | remote_* +
-   |                   |    |                         | snapshot
-   |                   |    |                         |
-   +-------------------+----+----------+--------+------+
-                       |               |        |
-                       v               v        v
-                  papr_hal.h  (every leaf driver + alarms/keypad/ble/
-                               battery/sensors/controller call HAL)
+   +--------+--------+------+-----+-----+------+-----+------+
+   ||       ||       ||     ||    ||    ||     ||     ||
+   v|       v|       v|     v|    v|    v|     v|     v|
+  blower  battery sensors alarms energy keypad ble   ota
+   ||               ||  ||                       |    |
+   v|               v|  v|                        |    | calls
+  l6235          sdp810 gdy1124                   |    | remote_* /
+   |               |    |                         |    | snapshot /
+   |               |    |                         |    | ota_*
+   +---------------+----+----------+--------+------+----+
+                   |               |        |      |    | (flash:
+                   v               v        v      v    v  erase/write/
+              papr_hal.h  (drivers + alarms/keypad/ble/ota/    read/
+                           battery/sensors/controller call HAL) commit/reboot)
 ```
 
 HAL call-count per module (a quick read of who is hardware-heavy):
 
 ```
-  l6235  17 | ble 10 | alarms 6 | controller 4 | keypad 4 | sdp810 4
-  gdy1124 3 | battery 2 | sensors 2 | blower 0 | energy 0 | main 0
+  l6235  17 | ble 10 | alarms 6 | controller 5 | keypad 4 | sdp810 4
+  gdy1124 3 | battery 2 | sensors 2 | ota 3 | blower 0 | energy 0 | main 0
 ```
+
+`ota` calls the HAL flash/reset group; `ble` carries the OTA command frames
+and forwards them to the controller's `ota_*` wrappers (which gate on idle).
 
 `blower` and `energy` make **zero** direct HAL calls — `blower` delegates all
 hardware to `l6235`; `energy` is a pure algorithm over values handed to it.
@@ -317,22 +320,31 @@ Each entry: role, primary type, who owns it, and its HAL surface.
 +---------------------------------------------------------------------------+
 | papr_ble                   owner: controller                             |
 |   GD32VW553 link. Framed binary protocol (AA 55 LEN CMD PAYLOAD CRC8),    |
-|   RX state machine -> controller_remote_* hooks, periodic telemetry +     |
-|   state/level/alarm EVENTs.                                               |
+|   RX state machine -> controller_remote_*/ota_* hooks, periodic telemetry |
+|   + state/level/alarm EVENTs, OTA_STATUS notifications.                   |
 |   type: papr_ble_t         HAL: uart_write, uart_read_byte,               |
 |                                 ble_set_reset, ble_host_wake              |
++---------------------------------------------------------------------------+
+| papr_ota                   owner: controller                             |
+|   OTA receiver. Stages an image in the inactive flash slot, verifies a    |
+|   whole-image CRC-32, commits boot metadata + resets on apply. Idle-      |
+|   gated; anti-downgrade; never erases the running image (recoverable).    |
+|   type: papr_ota_t         HAL: ota_slot_size, ota_erase, ota_write,      |
+|                                 ota_read, ota_commit, ota_reboot, wdt_kick|
 +---------------------------------------------------------------------------+
 ```
 
 Leaf headers (no logic):
 
 ```
-  papr_types.h   status enum, level/state enums, alarm bitmask,
-                 papr_telemetry_t (the cross-module data record)
-  papr_config.h  every compile-time knob (flow setpoints, PID gains,
-                 battery thresholds, I2C addresses, timings)
-  papr_hal.h     the hardware contract — the only seam between portable
-                 code and silicon
+  papr_types.h    status enum, level/state enums, alarm bitmask,
+                  papr_telemetry_t (the cross-module data record)
+  papr_config.h   every compile-time knob (flow setpoints, PID gains,
+                  battery thresholds, I2C addresses, OTA slot, timings)
+  papr_version.h  firmware version (single source of truth) + compare
+                  helper, used by ble GET_VERSION and ota anti-downgrade
+  papr_hal.h      the hardware contract — the only seam between portable
+                  code and silicon
 ```
 
 ---
@@ -354,6 +366,8 @@ declaration in `papr_hal.h`; the entire stack above compiles unchanged.
    keypad      keypad_drive_row / keypad_read_col
    ui          led_set / buzzer_set / (legacy) button_* 
    safety      wdt_kick
+   ota/flash   ota_slot_size / ota_erase / ota_write / ota_read /
+               ota_commit / ota_reboot
    lifecycle   init
 
   Two implementations ship:
@@ -385,9 +399,45 @@ declaration in `papr_hal.h`; the entire stack above compiles unchanged.
 All pacing derives from one monotonic source, `papr_hal_now_ms()`; wrap-safe
 unsigned subtraction is used everywhere (`(now - last) >= period`).
 
+OTA work runs inside the normal loop: BLE OTA frames are handled in step 4,
+flash erase/verify kick the watchdog directly, and an apply resets the MCU.
+
 ---
 
-## 10. Build / target matrix
+## 10. OTA flash map
+
+```
+  GD32E517RE flash, 512 KB
+  0x08000000  +-------------------+  bootloader (32 KB) — validates a slot,
+              |  bootloader       |   rolls back on a failed boot. Separate
+  0x08008000  +-------------------+   deliverable; firmware only writes the
+              |  slot A (app)     |   boot metadata + resets.
+              |   240 KB          |
+              |   [.. meta page]  |  last 2 KB page: MAGIC | size | crc32
+  0x08044000  +-------------------+
+              |  slot B (app)     |  the running image lives in one slot;
+              |   240 KB          |  papr_ota stages the new image into the
+              |   [.. meta page]  |  OTHER slot (chosen from SCB->VTOR).
+  0x08080000  +-------------------+
+
+  receive (RECEIVING)            apply (READY -> reset)
+   ble OTA_DATA                   ble OTA_APPLY
+      |                              |
+      v                              v
+   papr_ota_write                 papr_ota_apply
+      |                              |
+      v                              v
+   hal_ota_write(off)             hal_ota_commit(size,crc) -> hal_ota_reboot
+   into staging slot              writes meta page, NVIC reset
+
+  Integrity:  whole-image CRC-32 verified from flash at OTA_END before READY.
+  Safety:     begin only in STANDBY; running image never erased; downgrade
+              rejected; bootloader rolls back if the new image fails to boot.
+```
+
+---
+
+## 11. Build / target matrix
 
 ```
   PAPR_TARGET = HOST            (default)
@@ -402,32 +452,33 @@ unsigned subtraction is used everywhere (`(now - last) >= period`).
     output : flashable ELF (GD-Link / J-Link / OpenOCD)
 
   papr_core  =  blower battery sensors alarms l6235 sdp810 gdy1124
-                ble keypad energy controller
+                ble keypad energy ota controller
 ```
 
 ---
 
-## 11. Directory map
+## 12. Directory map
 
 ```
   papr/
-  |- README.md            build, pin maps, BLE + mobile-app protocol
+  |- README.md            build, pin maps, BLE + mobile-app + OTA protocol
   |- ARCHITECTURE.md      this document
   |- CMakeLists.txt       HOST vs GD32E517RE target selection
   |- include/
   |    papr_types.h  papr_config.h  papr_hal.h        (leaf contracts)
+  |    papr_version.h                                 (fw version)
   |    papr_controller.h                              (supervisor)
   |    papr_blower.h papr_l6235.h                     (actuation)
   |    papr_battery.h papr_sensors.h
   |    papr_sdp810.h papr_gdy1124.h                   (sensor drivers)
-  |    papr_alarms.h papr_energy.h papr_keypad.h papr_ble.h
+  |    papr_alarms.h papr_energy.h papr_keypad.h papr_ble.h papr_ota.h
   |- src/
   |    main.c            <entry>
   |    papr_controller.c <supervisor>
   |    papr_blower.c papr_l6235.c
   |    papr_battery.c papr_sensors.c
   |    papr_sdp810.c papr_gdy1124.c
-  |    papr_alarms.c papr_energy.c papr_keypad.c papr_ble.c
+  |    papr_alarms.c papr_energy.c papr_keypad.c papr_ble.c papr_ota.c
   |- hal/
        papr_hal_stub.c               (HOST)
        gd32e517re/
@@ -438,7 +489,7 @@ unsigned subtraction is used everywhere (`(now - last) >= period`).
 
 ---
 
-## 12. Cross-references
+## 13. Cross-references
 
 ```
   build & flashing ............. README.md  "Building"
@@ -446,6 +497,7 @@ unsigned subtraction is used everywhere (`(now - last) >= period`).
   sensor wiring ................ README.md  "SDP810" / "GDY1124"
   BLE wire protocol ............ README.md  "BLE wireless control"
   mobile app screens/use cases . README.md  "Mobile App Reference"
+  OTA update flow .............. README.md  "OTA firmware update"
   safety caveats ............... README.md  "Safety notes"
 ```
 

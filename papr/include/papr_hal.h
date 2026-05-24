@@ -90,4 +90,24 @@ papr_status_t papr_hal_buzzer_set(bool on, uint16_t freq_hz);
 /* Independent watchdog. */
 void papr_hal_wdt_kick(void);
 
+/* OTA / firmware update flash access. The "staging slot" is the inactive
+ * application bank; all offsets are relative to its base. Implementations
+ * must keep the watchdog fed during long erases (erase can take tens of ms).
+ *
+ *   slot_size()  usable bytes in the staging slot
+ *   erase()      erase the whole staging slot, ready for programming
+ *   write()      program len bytes at offset (offset+len within the slot;
+ *                offset and len are PAPR_OTA_WRITE_ALIGN-aligned)
+ *   read()       read back len bytes from offset (for CRC verification)
+ *   commit()     persist the boot metadata (size + CRC + "pending" flag) so
+ *                the bootloader runs the staged image on next reset
+ *   reboot()     trigger a system reset (does not return on real hardware)
+ */
+uint32_t      papr_hal_ota_slot_size(void);
+papr_status_t papr_hal_ota_erase(void);
+papr_status_t papr_hal_ota_write(uint32_t offset, const uint8_t *data, uint32_t len);
+papr_status_t papr_hal_ota_read(uint32_t offset, uint8_t *data, uint32_t len);
+papr_status_t papr_hal_ota_commit(uint32_t size, uint32_t crc32);
+void          papr_hal_ota_reboot(void);
+
 #endif /* PAPR_HAL_H */

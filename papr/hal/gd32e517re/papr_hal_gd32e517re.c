@@ -677,6 +677,120 @@ bool papr_hal_ble_host_wake(void)
 }
 
 /* ------------------------------------------------------------------------- */
+/* OTA flash (FMC) — dual-bank application slots                             */
+/* ------------------------------------------------------------------------- */
+/*
+ * Reference 512 KB flash map (see ARCHITECTURE.md "OTA flash map"):
+ *   0x08000000  bootloader        32 KB
+ *   0x08008000  slot A (app)     240 KB   <- one of these runs
+ *   0x08044000  slot B (staging) 240 KB   <- OTA writes the other
+ *   last page of each slot holds the boot metadata (magic|size|crc|version).
+ *
+ * The running image is whichever slot the bootloader jumped into. The HAL
+ * picks the *other* slot as the staging target. For a bootloader-less dev
+ * build (single image linked at slot A) staging is always slot B.
+ */
+#define OTA_SLOT_A_BASE   0x08008000U
+#define OTA_SLOT_B_BASE   0x08044000U
+#define OTA_SLOT_BYTES    (240U * 1024U)
+#define OTA_META_MAGIC    0x50415052U   /* "PAPR" */
+#define OTA_FLASH_PAGE    2048U          /* GD32E51x main-flash page = 2 KB */
+
+/* Determine which slot we are executing from so we stage into the other. */
+static uint32_t ota_running_slot_base(void)
+{
+    uint32_t pc_region = OTA_SLOT_A_BASE;
+    /* SCB->VTOR points at the active vector table = start of the running
+     * image. Compare against the slot bases. */
+    uint32_t vtor = SCB->VTOR;
+    if (vtor >= OTA_SLOT_B_BASE) { pc_region = OTA_SLOT_B_BASE; }
+    else                         { pc_region = OTA_SLOT_A_BASE; }
+    return pc_region;
+}
+
+static uint32_t ota_staging_base(void)
+{
+    return (ota_running_slot_base() == OTA_SLOT_A_BASE)
+            ? OTA_SLOT_B_BASE : OTA_SLOT_A_BASE;
+}
+
+uint32_t papr_hal_ota_slot_size(void)
+{
+    /* Reserve the final page for boot metadata. */
+    return OTA_SLOT_BYTES - OTA_FLASH_PAGE;
+}
+
+papr_status_t papr_hal_ota_erase(void)
+{
+    uint32_t base = ota_staging_base();
+    fmc_unlock();
+    papr_status_t rc = PAPR_OK;
+    for (uint32_t off = 0U; off < OTA_SLOT_BYTES; off += OTA_FLASH_PAGE)
+    {
+        if (fmc_page_erase(base + off) != FMC_READY) { rc = PAPR_ERR_HW; break; }
+        papr_hal_wdt_kick();   /* erasing 240 KB exceeds the WDT window */
+    }
+    fmc_lock();
+    return rc;
+}
+
+papr_status_t papr_hal_ota_write(uint32_t offset, const uint8_t *data, uint32_t len)
+{
+    if (data == NULL) { return PAPR_ERR_PARAM; }
+    uint32_t base = ota_staging_base();
+    fmc_unlock();
+    papr_status_t rc = PAPR_OK;
+    uint32_t i = 0U;
+    while (i < len)
+    {
+        uint32_t word = 0xFFFFFFFFU;
+        uint32_t take = ((len - i) >= 4U) ? 4U : (len - i);
+        for (uint32_t b = 0U; b < take; ++b)
+        {
+            ((uint8_t *)&word)[b] = data[i + b];
+        }
+        if (fmc_word_program(base + offset + i, word) != FMC_READY)
+        {
+            rc = PAPR_ERR_HW;
+            break;
+        }
+        i += 4U;
+    }
+    fmc_lock();
+    return rc;
+}
+
+papr_status_t papr_hal_ota_read(uint32_t offset, uint8_t *data, uint32_t len)
+{
+    if (data == NULL) { return PAPR_ERR_PARAM; }
+    const uint8_t *src = (const uint8_t *)(ota_staging_base() + offset);
+    for (uint32_t i = 0U; i < len; ++i) { data[i] = src[i]; }
+    return PAPR_OK;
+}
+
+papr_status_t papr_hal_ota_commit(uint32_t size, uint32_t crc32)
+{
+    /* Write the boot metadata into the last page of the staging slot. The
+     * bootloader reads MAGIC + size + crc to decide whether to boot it and,
+     * after a successful boot, marks it as the new active slot. */
+    uint32_t meta = ota_staging_base() + OTA_SLOT_BYTES - OTA_FLASH_PAGE;
+    fmc_unlock();
+    papr_status_t rc = PAPR_OK;
+    if (fmc_page_erase(meta) != FMC_READY) { rc = PAPR_ERR_HW; }
+    if (rc == PAPR_OK && fmc_word_program(meta + 0U,  OTA_META_MAGIC) != FMC_READY) { rc = PAPR_ERR_HW; }
+    if (rc == PAPR_OK && fmc_word_program(meta + 4U,  size)           != FMC_READY) { rc = PAPR_ERR_HW; }
+    if (rc == PAPR_OK && fmc_word_program(meta + 8U,  crc32)          != FMC_READY) { rc = PAPR_ERR_HW; }
+    fmc_lock();
+    return rc;
+}
+
+void papr_hal_ota_reboot(void)
+{
+    __disable_irq();
+    NVIC_SystemReset();   /* does not return */
+}
+
+/* ------------------------------------------------------------------------- */
 /* Watchdog                                                                  */
 /* ------------------------------------------------------------------------- */
 

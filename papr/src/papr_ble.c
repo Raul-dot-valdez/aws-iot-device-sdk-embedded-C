@@ -3,6 +3,7 @@
 #include "papr_controller.h"
 #include "papr_hal.h"
 #include "papr_sdp810.h"   /* for papr_sdp810_crc8 */
+#include "papr_version.h"
 
 #include <string.h>
 
@@ -18,9 +19,11 @@ enum
     RX_WAIT_CRC
 };
 
-#define VERSION_MAJOR  0
-#define VERSION_MINOR  6    /* tracks the firmware revision number */
-#define VERSION_PATCH  0
+/* Firmware version is owned by papr_version.h; these aliases keep the
+ * existing GET_VERSION code path readable. */
+#define VERSION_MAJOR  PAPR_FW_VERSION_MAJOR
+#define VERSION_MINOR  PAPR_FW_VERSION_MINOR
+#define VERSION_PATCH  PAPR_FW_VERSION_PATCH
 
 /* ---- Frame helpers ------------------------------------------------------- */
 
@@ -81,6 +84,26 @@ static void pack_u32_le(uint8_t *p, uint32_t v)
     p[1] = (uint8_t)(v >> 8);
     p[2] = (uint8_t)(v >> 16);
     p[3] = (uint8_t)(v >> 24);
+}
+
+static uint32_t unpack_u32_le(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/* Builds and sends an OTA_STATUS notification: [state, error, pct, maj,
+ * min, pat]. The version reported is the *running* firmware, so the app can
+ * tell the user what is installed now and compare against the latest. */
+static void send_ota_status(struct papr_controller *ctrl)
+{
+    uint8_t st = 0U, err = 0U, pct = 0U;
+    papr_controller_ota_status(ctrl, &st, &err, &pct);
+    uint8_t p[6] = { st, err, pct,
+                     PAPR_FW_VERSION_MAJOR,
+                     PAPR_FW_VERSION_MINOR,
+                     PAPR_FW_VERSION_PATCH };
+    (void)send_frame(PAPR_BLE_NTF_OTA_STATUS, p, sizeof(p));
 }
 
 papr_status_t papr_ble_send_telemetry(papr_ble_t *b,
@@ -176,6 +199,60 @@ static void dispatch(papr_ble_t *b, struct papr_controller *ctrl,
             if (len != 1U) { send_nack(cmd, 1U); return; }
             papr_controller_remote_set_auto(ctrl, payload[0] != 0U);
             send_ack(cmd);
+            break;
+
+        case PAPR_BLE_CMD_OTA_BEGIN:
+        {
+            if (len != 11U) { send_nack(cmd, 1U); return; }
+            uint32_t size = unpack_u32_le(&payload[0]);
+            uint32_t crc  = unpack_u32_le(&payload[4]);
+            papr_fw_version_t ver = { payload[8], payload[9], payload[10] };
+            (void)papr_controller_ota_begin(ctrl, size, crc, ver);
+            send_ota_status(ctrl);   /* reports RECEIVING or the error */
+            break;
+        }
+
+        case PAPR_BLE_CMD_OTA_DATA:
+        {
+            if (len < 5U) { send_nack(cmd, 1U); return; }
+            uint32_t offset = unpack_u32_le(&payload[0]);
+            uint16_t n      = (uint16_t)(len - 4U);
+            papr_ota_error_t e =
+                papr_controller_ota_write(ctrl, offset, &payload[4], n);
+            if (e == PAPR_OTA_ERR_NONE)
+            {
+                /* Fast path: bare ACK lets the app pipeline the next chunk. */
+                send_ack(cmd);
+            }
+            else
+            {
+                send_ota_status(ctrl);
+            }
+            break;
+        }
+
+        case PAPR_BLE_CMD_OTA_END:
+            (void)papr_controller_ota_finish(ctrl);
+            send_ota_status(ctrl);   /* READY on success, error otherwise */
+            break;
+
+        case PAPR_BLE_CMD_OTA_APPLY:
+        {
+            papr_ota_error_t e = papr_controller_ota_apply(ctrl);
+            /* If apply succeeded the MCU resets inside the call and never
+             * reaches here; if it returns, report why it could not apply. */
+            (void)e;
+            send_ota_status(ctrl);
+            break;
+        }
+
+        case PAPR_BLE_CMD_OTA_ABORT:
+            papr_controller_ota_abort(ctrl);
+            send_ota_status(ctrl);
+            break;
+
+        case PAPR_BLE_CMD_OTA_STATUS:
+            send_ota_status(ctrl);
             break;
 
         default:

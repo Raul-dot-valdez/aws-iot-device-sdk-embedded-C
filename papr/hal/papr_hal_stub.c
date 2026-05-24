@@ -244,6 +244,60 @@ papr_status_t papr_hal_ble_set_reset(bool asserted)
 
 bool papr_hal_ble_host_wake(void) { return false; }
 
+/* ---- OTA flash stub ------------------------------------------------------
+ * A RAM buffer stands in for the inactive flash slot so the OTA receive /
+ * verify path runs end-to-end on the host. commit() records the metadata and
+ * reboot() is a no-op (the host process keeps running). */
+
+static uint8_t  s_ota_slot[PAPR_OTA_SLOT_SIZE];
+static uint32_t s_ota_committed_size;
+static uint32_t s_ota_committed_crc;
+static bool     s_ota_pending;
+
+uint32_t papr_hal_ota_slot_size(void)
+{
+    return (uint32_t)sizeof(s_ota_slot);
+}
+
+papr_status_t papr_hal_ota_erase(void)
+{
+    memset(s_ota_slot, 0xFF, sizeof(s_ota_slot));
+    return PAPR_OK;
+}
+
+papr_status_t papr_hal_ota_write(uint32_t offset, const uint8_t *data, uint32_t len)
+{
+    if (data == NULL) { return PAPR_ERR_PARAM; }
+    if ((uint64_t)offset + len > sizeof(s_ota_slot)) { return PAPR_ERR_PARAM; }
+    memcpy(&s_ota_slot[offset], data, len);
+    return PAPR_OK;
+}
+
+papr_status_t papr_hal_ota_read(uint32_t offset, uint8_t *data, uint32_t len)
+{
+    if (data == NULL) { return PAPR_ERR_PARAM; }
+    if ((uint64_t)offset + len > sizeof(s_ota_slot)) { return PAPR_ERR_PARAM; }
+    memcpy(data, &s_ota_slot[offset], len);
+    return PAPR_OK;
+}
+
+papr_status_t papr_hal_ota_commit(uint32_t size, uint32_t crc32)
+{
+    s_ota_committed_size = size;
+    s_ota_committed_crc  = crc32;
+    s_ota_pending        = true;
+    return PAPR_OK;
+}
+
+void papr_hal_ota_reboot(void)
+{
+    /* On real hardware this is NVIC_SystemReset(); the host keeps running so
+     * tests can inspect the committed metadata. */
+    (void)s_ota_committed_size;
+    (void)s_ota_committed_crc;
+    (void)s_ota_pending;
+}
+
 papr_status_t papr_hal_read_battery_mv(uint16_t *out)
 {
     if (out == NULL) { return PAPR_ERR_PARAM; }

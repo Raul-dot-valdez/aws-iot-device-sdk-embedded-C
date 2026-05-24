@@ -7,8 +7,10 @@
 #include "papr_blower.h"
 #include "papr_energy.h"
 #include "papr_keypad.h"
+#include "papr_ota.h"
 #include "papr_sensors.h"
 #include "papr_types.h"
+#include "papr_version.h"
 
 typedef struct papr_controller
 {
@@ -21,6 +23,7 @@ typedef struct papr_controller
     papr_ble_t          ble;
     papr_keypad_t       keypad;
     papr_energy_t       energy;
+    papr_ota_t          ota;
     uint32_t            last_control_ms;
     uint32_t            last_sensor_ms;
     uint32_t            last_wdt_ms;
@@ -69,5 +72,30 @@ void papr_controller_remote_reset_fault(papr_controller_t *c);
 
 /* Toggle adaptive-comfort / auto level mode from the remote app. */
 void papr_controller_remote_set_auto(papr_controller_t *c, bool enabled);
+
+/* ---- OTA firmware update (driven by the BLE command dispatcher) ----------
+ * begin() is gated on the supervisor being idle (STANDBY) so an update can
+ * never start while the blower is running. The controller also blocks the
+ * blower from starting while an OTA transfer is in progress. */
+papr_ota_error_t papr_controller_ota_begin(papr_controller_t *c,
+                                           uint32_t image_size,
+                                           uint32_t image_crc32,
+                                           papr_fw_version_t incoming);
+papr_ota_error_t papr_controller_ota_write(papr_controller_t *c,
+                                           uint32_t offset,
+                                           const uint8_t *data, uint16_t len);
+papr_ota_error_t papr_controller_ota_finish(papr_controller_t *c);
+
+/* Commits the staged image then resets the MCU. The caller (BLE dispatcher)
+ * must flush its acknowledgement before invoking this, since on real hardware
+ * it does not return. Returns the error if the image is not READY. */
+papr_ota_error_t papr_controller_ota_apply(papr_controller_t *c);
+void             papr_controller_ota_abort(papr_controller_t *c);
+
+/* Current OTA state / error / progress for the OTA_STATUS notification. */
+void papr_controller_ota_status(const papr_controller_t *c,
+                                uint8_t *out_state,
+                                uint8_t *out_error,
+                                uint8_t *out_percent);
 
 #endif /* PAPR_CONTROLLER_H */
