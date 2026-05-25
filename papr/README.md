@@ -55,10 +55,25 @@ Reference firmware for a Powered Air-Purifying Respirator (PAPR) running on
     The station asserts a TEST_MODE pad and resets; the firmware then runs
     BIST over every subsystem and exposes provisioning / actuation / sensor
     commands over the UART test pads (same framing as BLE). See "Production
-    test" below. The firmware version is centralised in `papr_version.h`
-    (currently **v0.8.0**).
+    test" below.
+- **Revision 9** — **secure boot, dual-bank flash, and cybersecurity** aligned
+  to the stringent connected-device regimes (ETSI EN 303 645, EN 18031,
+  NIST IR 8259/8425, IEC 62443-4-2, FDA premarket cybersecurity):
+  - **`papr_sha256`** self-contained SHA-256 + HMAC-SHA256 (known-answer
+    self-tested at boot).
+  - **`papr_secure`** authenticated control (a BLE central must pass an
+    HMAC-SHA256 challenge/response over the per-device key before any
+    state-changing command is honoured), signed + anti-rollback OTA
+    (SHA-256 image hash + vendor signature + monotonic security version),
+    audit counters, and auth lockout.
+  - A standalone **reference bootloader** (`boot/papr_boot.c`) verifies each
+    slot's signed manifest before running it (secure boot) and implements
+    one-try rollback across two app slots. Dual-bank linker scripts
+    (`linker/`) and CMake options build either slot plus the bootloader.
+    The firmware version is centralised in `papr_version.h` (currently
+    **v0.9.0**).
 
-  All revision-1 modules and headers remain in place; revisions 2-8 only
+  All revision-1 modules and headers remain in place; revisions 2-9 only
   added or extended functionality.
 
 ## Layout
@@ -156,16 +171,22 @@ for the remaining 13 of the 64 LQFP positions.
   breathing rate / amplitude, recommends a flow level for auto mode,
   runs a coulomb counter for "minutes remaining", and smooths the
   worker's session lengths with an EWMA.
-- `papr_ota` — over-the-air firmware update receiver. Stages an incoming
-  image in the inactive flash slot via the HAL, verifies a CRC-32 over the
-  whole image, and on apply commits a boot flag and resets. Gated so a
-  transfer can only begin while the unit is idle.
+- `papr_ota` — secure over-the-air update receiver. Streams the image into the
+  inactive flash slot while hashing it (SHA-256), then verifies integrity
+  (hash), authenticity (vendor signature over the manifest) and anti-rollback
+  (monotonic security version) before commit. Gated so a transfer can only
+  begin while the unit is idle.
 - `papr_provision` — per-unit identity + calibration in a dedicated flash
   page (serial, HW rev, mfg date, BLE MAC, flow/current cal). Written by the
   production station, read by the application; survives OTA updates.
 - `papr_factory` — end-of-line built-in self-test (BIST) and factory command
   loop. Entered at boot when the TEST_MODE pad is asserted; talks the same
   framed protocol as BLE over the UART test pads.
+- `papr_sha256` — self-contained SHA-256 + HMAC-SHA256 with a known-answer
+  self-test; underpins OTA integrity, image authenticity, and BLE auth.
+- `papr_secure` — cybersecurity services: authenticated control (challenge /
+  response session auth), signed + anti-rollback image verification, audit
+  counters, and auth lockout. See "Cybersecurity" below.
 - `papr_battery`, `papr_sensors`, `papr_alarms` — battery state, environmental
   sensors, alarm latching/rendering.
 - `papr_hal` — vendor-agnostic hardware contract; only exposes raw I²C
@@ -236,12 +257,19 @@ Mobile → device commands:
 | 0x06 | GET_VERSION    | empty                                 |
 | 0x07 | GET_TELEMETRY  | empty                                 |
 | 0x08 | SET_AUTO_MODE  | `[u8 enable]` (0=manual, 1=adaptive)  |
-| 0x09 | OTA_BEGIN      | `[u32 size][u32 crc32][u8 maj,min,pat]` |
+| 0x09 | OTA_BEGIN      | signed manifest (108 B, see OTA below)|
 | 0x0A | OTA_DATA       | `[u32 offset][image bytes…]`          |
-| 0x0B | OTA_END        | empty (verify CRC)                    |
+| 0x0B | OTA_END        | empty (verify hash + signature)       |
 | 0x0C | OTA_APPLY      | empty (commit + reboot)               |
 | 0x0D | OTA_ABORT      | empty                                 |
 | 0x0E | OTA_STATUS     | empty (request status)                |
+| 0x10 | AUTH_BEGIN     | empty -> AUTH_CHALLENGE               |
+| 0x11 | AUTH_RESPONSE  | `[u8 tag[16]]` (HMAC over the nonce)  |
+| 0x12 | SEC_STATUS     | empty (request security status)       |
+
+State-changing commands (SET_LEVEL, POWER_*, MUTE_ALARM, RESET_FAULT,
+SET_AUTO_MODE, all OTA_*) require an **authenticated session** — see
+"Cybersecurity" below. Read-only commands and the AUTH handshake do not.
 
 Device → mobile notifications:
 
@@ -252,6 +280,8 @@ Device → mobile notifications:
 | 0x82 | NACK           | `[u8 cmd, u8 reason]`                 |
 | 0x83 | EVENT          | `[u8 event_type, …]`                  |
 | 0x84 | OTA_STATUS     | `[u8 state, u8 error, u8 pct, u8 maj,min,pat]` |
+| 0x85 | AUTH_CHALLENGE | `[u8 nonce[16], u32 counter]`         |
+| 0x86 | SEC_STATUS     | `[u8 auth_state, u8 flags, u16 fail, u16 reject]` |
 
 Telemetry is broadcast every `PAPR_BLE_TELEM_PERIOD_MS` (500 ms by
 default) and on every state, level, or alarm-mask change. The telemetry
@@ -308,62 +338,218 @@ When the user enables auto mode (MODE key or BLE `SET_AUTO_MODE` 1):
    session length so the mobile app can warn early when the budget runs
    short of their usual shift duration.
 
-## OTA firmware update (rev 7)
+## OTA firmware update (rev 7, secured in rev 9)
 
 Workers (or a supervisor via the mobile app) can check the installed firmware
-version and update it wirelessly. The design favours safety and recoverability
-over speed.
+version and update it wirelessly. The design favours safety, authenticity, and
+recoverability over speed. From rev 9 every image is cryptographically
+verified (see "Cybersecurity").
 
-### Flash map (GD32E517RE, 512 KB)
+### Flash map (GD32E517RE, 512 KB) — final rev-9 layout
 
 ```
-  0x08000000  +-------------------+
-              | bootloader  32 KB |  validates + selects a slot, rollback
-  0x08008000  +-------------------+
-              | slot A (app)      |  240 KB  --- one slot runs,
-              |  ... + meta page  |              the other is the OTA target
-  0x08044000  +-------------------+
-              | slot B (app)      |  240 KB
-              |  ... + meta page  |
+  0x08000000  +-------------------+  bootloader (28 KB): verifies + selects a
+              | bootloader        |   slot, one-try rollback
+  0x08007000  +-------------------+  boot-state page (mutable lifecycle)
+  0x08007800  +-------------------+  provisioning page (serial/cal/keys)
+  0x08008000  +-------------------+  slot A app (238 KB) + 2 KB signed
+              | slot A            |   manifest trailer @ 0x08043800
+  0x08044000  +-------------------+  slot B app (238 KB) + 2 KB signed
+              | slot B            |   manifest trailer @ 0x0807F800
   0x08080000  +-------------------+
 ```
 
 The HAL stages the image into whichever slot is **not** running (chosen from
-`SCB->VTOR`). The last 2 KB page of each slot holds boot metadata
-(`MAGIC | size | crc32`). The bootloader itself is a separate deliverable; the
-firmware's contract with it is just "write metadata + reset", implemented by
-`papr_hal_ota_commit()` / `papr_hal_ota_reboot()`.
+`SCB->VTOR`). The slot trailer holds the signed manifest
+(`papr_img_manifest_t`: magic, size, sec_version, fw version, SHA-256,
+signature). `papr_hal_ota_commit()` writes it and marks the slot PENDING in the
+boot-state page; the bootloader re-verifies it before booting.
 
 ### Update flow & safety
 
 ```
-  OTA_BEGIN  --> papr_ota_begin   (idle? size ok? not a downgrade?) erase slot
-  OTA_DATA*  --> papr_ota_write   sequential, word-aligned chunks -> flash
-  OTA_END    --> papr_ota_finish  read back, CRC-32 over whole image
-  OTA_APPLY  --> papr_ota_apply   commit boot meta, then MCU reset
-  OTA_ABORT  --> papr_ota_abort   back to IDLE at any time
+  OTA_BEGIN  --> papr_ota_begin    (idle? size ok? not a downgrade?) erase slot
+  OTA_DATA*  --> papr_ota_write    sequential word-aligned chunks -> flash,
+                                   hashed (SHA-256) as they land
+  OTA_END    --> papr_ota_finish   finalize hash; verify integrity + signature
+                                   + anti-rollback
+  OTA_APPLY  --> papr_ota_apply    bump sec-version, write signed manifest, reset
+  OTA_ABORT  --> papr_ota_abort    back to IDLE at any time
 ```
 
+- **Authenticated:** OTA commands require an authenticated BLE session.
+- **Authentic + intact:** the streamed bytes must hash to the manifest
+  SHA-256 and the manifest signature must verify against the vendor key
+  (`PAPR_SEC_REQUIRE_SIGNED_OTA`, default on). A tampered image is refused.
 - **Idle-only:** `OTA_BEGIN` is rejected unless the supervisor is in STANDBY,
   and the blower cannot be started while a transfer is in progress.
-- **Anti-downgrade:** images older than the running version are rejected
-  (`PAPR_OTA_REJECT_DOWNGRADE`, equal versions allowed for re-flash).
-- **Integrity:** the whole image is CRC-32 verified from flash before it can
-  be applied; a bad CRC leaves the running image untouched.
-- **Recoverability:** the active image is never erased — only the inactive
-  slot — so a failed or interrupted update cannot brick the device; the
-  bootloader rolls back if the new image fails to boot.
-- **CRC-32** is the standard reflected zlib/Ethernet variant so the app can
-  precompute it with any stock library.
+- **Anti-rollback:** an image whose `sec_version` is below the stored
+  monotonic floor is rejected.
+- **Recoverable:** the active slot is never erased — only the inactive slot —
+  so a failed/interrupted update cannot brick the device; the bootloader
+  rolls back if the new image fails to boot and confirm.
+
+### Manifest (OTA_BEGIN payload, 108 bytes)
+
+```
+  off  size  field         notes
+  ---  ----  ------------  -------------------------------------------------
+   0    4    image_size    bytes of the app image (excl. trailer), u32 LE
+   4    4    sec_version   anti-rollback monotonic counter, u32 LE
+   8    1    fw_major
+   9    1    fw_minor
+  10    1    fw_patch
+  11    1    sig_len       signature length (32 for the HMAC reference)
+  12   32    sha256        SHA-256 of the image bytes
+  44   64    signature     vendor signature over the manifest header+hash
+  --- 108    total
+  (magic is set by the device; the signature covers the 48-byte header
+   ending at the signature field, i.e. magic..sha256.)
+```
 
 ### OTA error codes (in OTA_STATUS.error)
 
 ```
   0 NONE     1 BUSY (not idle)   2 SIZE (too big)   3 SEQUENCE (bad offset)
-  4 ALIGN    5 FLASH             6 CRC mismatch     7 VERSION (downgrade)
-  8 STATE    (wrong state for the command)
+  4 ALIGN    5 FLASH             6 HASH mismatch     7 AUTH (bad signature)
+  8 ROLLBACK 9 STATE
   OTA states: 0 IDLE  1 RECEIVING  2 READY  3 ERROR
 ```
+
+## Cybersecurity (rev 9)
+
+The firmware ships **secure by default** (enforcement on unless a build flag
+disables it) and maps to the controls common to the stringent connected-device
+regimes:
+
+```
+  Control                          Standard reference
+  -------------------------------  ----------------------------------------
+  No default passwords / unique    ETSI EN 303 645 5.1; EN 18031; NIST IR
+   per-device credential            8425; UK PSTI
+  Authenticated, least-privilege   ETSI 5.5; IEC 62443-4-2 CR1/CR2; FDA
+   control access                   "authentication / authorization"
+  Secure software updates +        ETSI 5.3; EN 18031; NIST IR 8259 ;
+   integrity & authenticity         FDA "integrity / authenticity"
+  Anti-rollback                    FDA premarket; IEC 62443 CR3.4
+  Secure boot / verified boot      FDA; IEC 62443 CR3.4
+  Protect security parameters      ETSI 5.4 (keys in protected storage,
+   (keys) / no key exfiltration     debug lock after production)
+  Minimise attack surface          ETSI 5.6 (telemetry read-only; control
+                                    gated; bounded, CRC'd parsers)
+  Examine/secure-by-default +      ETSI 5.12 / 5.7; NIST logging
+   audit / event logging
+```
+
+### Authenticated control (challenge / response)
+
+Telemetry (read) is open; every **state-changing** command is gated behind a
+session the central must authenticate, proving knowledge of the per-device
+session key without transmitting it:
+
+```
+  app                                   device
+   |  AUTH_BEGIN                         |
+   |----------------------------------->|  rng() nonce; counter++
+   |  AUTH_CHALLENGE [nonce16, counter] |
+   |<-----------------------------------|
+   |  tag = HMAC-SHA256(session_key,    |
+   |        nonce || counter_le)[0:16]  |
+   |  AUTH_RESPONSE [tag16]             |
+   |----------------------------------->|  constant-time compare
+   |  ACK  (session now OPEN)            |
+   |<-----------------------------------|
+   |  ... control commands allowed ...   |
+```
+
+- The session key is provisioned per device (`PAPR_KEY_SESSION`) and shared
+  with the authorized app via the user's account / pairing — there is no
+  universal default credential.
+- The nonce is random per challenge and the counter monotonic, so a captured
+  response cannot be replayed.
+- After `PAPR_SEC_AUTH_MAX_FAILS` (5) bad responses the device locks out new
+  challenges for `PAPR_SEC_AUTH_LOCKOUT_MS` (30 s). Failures and OTA rejects
+  are counted and exposed via `SEC_STATUS` for audit.
+- A control command on an unauthenticated link is answered with NACK reason 5
+  (auth required). On BLE disconnect / re-pair the session is closed.
+
+`SEC_STATUS` flags: `0x01` crypto-self-test-ok, `0x02` auth-required,
+`0x04` signed-OTA-required, `0x08` debug-locked.
+
+### Keys & secrets
+
+```
+  PAPR_KEY_SESSION  per-device secret (HMAC) for BLE session auth
+  PAPR_KEY_VENDOR   vendor key used to verify the OTA / boot image signature
+```
+
+Keys are provisioned into the protected provisioning page at the factory and
+the page is read-protected when `papr_hal_secure_lock_debug()` runs at
+end-of-line. The reference HAL verifies signatures with HMAC-SHA256 (a real,
+testable MAC); a production port replaces `papr_hal_sec_verify()` with
+ECDSA-P256 / Ed25519 on the MCU crypto engine so the signing key never leaves
+the vendor's HSM and only a **public** key sits on the device.
+
+### Crypto self-test
+
+`papr_secure_init()` runs `papr_sha256_selftest()` (NIST known-answer vectors
+for SHA-256 and HMAC-SHA256) at boot; if it fails the device refuses all
+security operations (no auth, no OTA) — a tamper / corruption tripwire.
+
+## Secure boot & dual-bank (rev 9)
+
+A standalone bootloader establishes the root of trust and gives the OTA path
+its rollback safety net.
+
+```
+  reset
+    |
+    v
+  bootloader (0x08000000)
+    |  SHA-256 self-test (refuse if it fails)
+    |  for each slot: verify manifest (image hash + vendor signature)
+    |  a slot left TRYING but never confirmed -> mark INVALID (rollback)
+    |  pick: a verifiable PENDING image (one try) else the highest
+    |        sec_version VALID image
+    |  set VTOR + MSP, jump to the chosen slot
+    v
+  application
+    |  on a healthy self-test: papr_hal_ota_confirm() -> slot VALID
+    |  (a freshly-OTA'd image that crashes before this is rolled back)
+```
+
+- **Verified boot:** the bootloader recomputes the image SHA-256 and checks
+  the vendor signature on every reset; an unsigned/tampered slot is refused
+  and marked INVALID (`PAPR_BOOT_REQUIRE_SIG`, default on).
+- **One-try rollback:** OTA marks the new slot PENDING; the bootloader marks it
+  TRYING and boots it once; only an app self-test confirm promotes it to VALID.
+  A boot loop therefore reverts to the last good image automatically.
+- **No-brick:** the running slot is never erased during an update; if nothing
+  verifies the bootloader stays in a recovery loop awaiting SWD/DFU reflash.
+
+### Building the secure, dual-bank set
+
+```sh
+# bootloader
+cmake -S papr -B papr/bl -DPAPR_TARGET=GD32E517RE \
+      -DGD32E51X_SDK_DIR=... -DCMAKE_TOOLCHAIN_FILE=... -DPAPR_BUILD_BOOTLOADER=ON
+cmake --build papr/bl --target papr_bootloader     # -> 0x08000000
+
+# application linked for slot A (golden / factory image)
+cmake -S papr -B papr/a  -DPAPR_TARGET=GD32E517RE -DPAPR_APP_SLOT=A \
+      -DGD32E51X_SDK_DIR=... -DCMAKE_TOOLCHAIN_FILE=...
+cmake --build papr/a                                # -> 0x08008000
+
+# application linked for slot B (OTA target image)
+cmake -S papr -B papr/b  -DPAPR_TARGET=GD32E517RE -DPAPR_APP_SLOT=B ...
+```
+
+After building an app image, the **release/signing tool** (off-device, holding
+the private key) computes the SHA-256 over the image, builds the manifest, and
+signs it; the manifest is appended to the slot trailer (production flashing) or
+delivered with the image (OTA). Leaving `PAPR_APP_SLOT` unset keeps the
+original single-image dev build (`hal/gd32e517re/gd32e517re.ld`) for
+bring-up without a bootloader.
 
 ## Production test (DFM / DFT, rev 8)
 
@@ -769,7 +955,7 @@ payload byte:
   |  Breathing       18 /min             |  breaths_per_min
   |  State           RUNNING (3)         |  state
   |  Alarms          0x09                |  alarms (raw hex)
-  |  FW version      0.8.0               |  GET_VERSION ACK payload
+  |  FW version      0.9.0               |  GET_VERSION ACK payload
   |                                      |
   |  [  CLEAR FAULT  ]   (state==FAULT)  |  -> RESET_FAULT (0x05)
   +--------------------------------------+
@@ -782,7 +968,7 @@ payload byte:
   |  < Home               Settings       |
   +--------------------------------------+
   |  Device         PAPR-7F3A            |
-  |  Firmware       v0.8.0               |   <- GET_VERSION
+  |  Firmware       v0.9.0               |   <- GET_VERSION
   |  Telemetry rate 500 ms (read-only)   |
   |                                      |
   |  [   RE-PAIR BLE MODULE   ]          |   (BLE PAIR key is on the unit;
@@ -805,8 +991,8 @@ firmware never decides "newer exists" — it only reports what it runs.
   |  < Settings          Firmware        |      |  < Settings          Firmware        |
   +--------------------------------------+      +--------------------------------------+
   |                                      |      |                                      |
-  |   Installed     v0.8.0               |      |   Updating...   do NOT power off     |
-  |   Latest        v0.8.0   (available) |      |                                      |
+  |   Installed     v0.9.0               |      |   Updating...   do NOT power off     |
+  |   Latest        v0.9.0   (available) |      |                                      |
   |                                      |      |   [##########------]  58 %           |  <- OTA_STATUS.pct
   |   * Update can only run while the    |      |   1.2 MB / 2.0 MB                     |
   |     unit is OFF (standby).           |      |                                      |
@@ -819,7 +1005,7 @@ firmware never decides "newer exists" — it only reports what it runs.
   |  < Settings          Firmware        |      |  Firmware update                     |
   +--------------------------------------+      +--------------------------------------+
   |   Verified OK.  Ready to install.    |      |   [!] Update failed                  |
-  |                                      |      |       reason: CRC mismatch (6)        |  <- OTA_STATUS.error
+  |                                      |      |       reason: bad signature (7)      |  <- OTA_STATUS.error
   |   The unit will restart to finish.   |      |                                      |
   |                                      |      |   The current firmware is unchanged. |
   |   [   RESTART & APPLY   ]            |      |   [   TRY AGAIN   ]                   |
@@ -871,16 +1057,21 @@ All multi-byte integers are little-endian.
   0x05  RESET_FAULT     (none)                  ACK 0x81 [0x05]
   0x06  GET_VERSION     (none)                  ACK 0x81 [maj,min,pat]
   0x07  GET_TELEMETRY   (none)                  TELEMETRY 0x80 [..29..]
-  0x08  SET_AUTO_MODE   [u8 0|1]                ACK 0x81 [0x08]
-  0x09  OTA_BEGIN       [u32 size][u32 crc32]   OTA_STATUS 0x84
-                        [u8 maj,min,pat]          (state=RECEIVING or error)
+  0x08  SET_AUTO_MODE   [u8 0|1]                ACK 0x81 [0x08]   (auth)
+  0x09  OTA_BEGIN       manifest (108 B)        OTA_STATUS 0x84   (auth)
+                                                  (state=RECEIVING or error)
   0x0A  OTA_DATA        [u32 off][bytes..124]   ACK 0x81 [0x0A] (per chunk)
-                                                  or OTA_STATUS on error
+                                                  or OTA_STATUS on error  (auth)
   0x0B  OTA_END         (none)                  OTA_STATUS 0x84 (READY|error)
   0x0C  OTA_APPLY       (none)                  ACK on wire, then reboot
                                                   (OTA_STATUS if not READY)
   0x0D  OTA_ABORT       (none)                  OTA_STATUS 0x84 (IDLE)
   0x0E  OTA_STATUS      (none)                  OTA_STATUS 0x84
+  0x10  AUTH_BEGIN      (none)                  AUTH_CHALLENGE 0x85
+  0x11  AUTH_RESPONSE   [u8 tag[16]]            ACK 0x81 / NACK(4) + SEC_STATUS
+  0x12  SEC_STATUS      (none)                  SEC_STATUS 0x86
+
+  (auth) = requires an OPEN session; rejected with NACK reason 5 otherwise.
 
   Unsolicited from firmware:
   0x80  TELEMETRY       [29 bytes]              every 500 ms + on change
@@ -892,26 +1083,38 @@ All multi-byte integers are little-endian.
   0x84  OTA_STATUS      [u8 state, u8 error, u8 pct, u8 maj, u8 min, u8 pat]
           state  0 IDLE  1 RECEIVING  2 READY  3 ERROR
           error  0 NONE 1 BUSY 2 SIZE 3 SEQUENCE 4 ALIGN 5 FLASH
-                 6 CRC 7 VERSION 8 STATE
+                 6 HASH 7 AUTH 8 ROLLBACK 9 STATE
+  0x85  AUTH_CHALLENGE  [u8 nonce[16], u32 LE counter]
+  0x86  SEC_STATUS      [u8 auth_state, u8 flags, u16 fail, u16 reject]
+          auth_state 0 IDLE 1 CHALLENGED 2 OPEN 3 LOCKED
+          flags  0x01 crypto-ok 0x02 auth-req 0x04 signed-OTA 0x08 dbg-locked
 
   Errors:
   0x82  NACK            [u8 cmd, u8 reason]
-          reason 1 = bad/!len payload   2 = unknown cmd   3 = CRC error
+          reason 1 = bad/!len payload  2 = unknown cmd  3 = CRC error
+                 4 = auth failed        5 = auth required
 ```
 
-### Use case A — connect and start
+### Use case A — connect, authenticate, and start
 
 ```
   app                         firmware (via module)
    |  scan, connect, subscribe TX    |
    |-------------------------------->|
-   |  WRITE GET_VERSION (0x06)       |
+   |  WRITE GET_VERSION (0x06)       |   (read-only, no auth needed)
    |-------------------------------->|
-   |        ACK [0,8,0]              |
+   |        ACK [0,9,0]              |
    |<--------------------------------|
-   |  WRITE GET_TELEMETRY (0x07)     |
+   |  -- authenticate before control --
+   |  WRITE AUTH_BEGIN (0x10)        |
    |-------------------------------->|
-   |        TELEMETRY (state=STANDBY)|
+   |        AUTH_CHALLENGE [nonce,ctr]|
+   |<--------------------------------|
+   |  tag = HMAC(session_key,        |
+   |        nonce||ctr)[0:16]         |
+   |  WRITE AUTH_RESPONSE [tag] (0x11)|
+   |-------------------------------->|
+   |        ACK [0x11]  (session OPEN)|
    |<--------------------------------|
    |  user taps POWER ON             |
    |  WRITE POWER_ON (0x02)          |
@@ -922,6 +1125,9 @@ All multi-byte integers are little-endian.
    |<--------------------------------|
    |        TELEMETRY (state=RUNNING)|
    |<--------------------------------|  (then every 500 ms)
+
+  Without the AUTH exchange, POWER_ON would return NACK reason 5
+  (auth required). Telemetry/version reads work before authentication.
 ```
 
 ### Use case B — enable adaptive comfort
@@ -988,41 +1194,40 @@ All multi-byte integers are little-endian.
 
 ```
   app                                   firmware
-   |  Settings: Installed v0.8.0             |
-   |  server says latest = v0.8.0            |
+   |  Settings: Installed v0.9.0             |
+   |  server: latest=v1.0.0, fetch signed    |
+   |   image + manifest (size, sha256, sig)  |
+   |  authenticate (AUTH_BEGIN/RESPONSE)     |   control requires a session
    |  ensure device is OFF (STANDBY)         |
    |                                         |
-   |  WRITE OTA_BEGIN [size, crc32, 0,8,0]   |
+   |  WRITE OTA_BEGIN [manifest 108 B]       |
    |---------------------------------------->|  reject if running, downgrade,
-   |        OTA_STATUS state=RECEIVING err=0 |  or too big -> err 1/7/2
+   |        OTA_STATUS state=RECEIVING err=0 |  too big -> err 1/8/2; erase slot
    |<----------------------------------------|
    |                                         |
    |  loop over image in <=124-byte chunks:  |
-   |   WRITE OTA_DATA [off=0,    bytes]       |
-   |---------------------------------------->|  program flash @ off
+   |   WRITE OTA_DATA [off, bytes]           |
+   |---------------------------------------->|  program flash @ off; hash bytes
    |        ACK [0x0A]                        |
    |<----------------------------------------|
-   |   WRITE OTA_DATA [off=124,  bytes]       |
-   |---------------------------------------->|
-   |        ACK [0x0A]                        |   (update progress bar from
-   |<----------------------------------------|    off/size; or poll OTA_STATUS)
-   |   ... until all bytes sent ...           |
+   |   ... until all bytes sent ...           |  (progress = off/size)
    |                                         |
    |  WRITE OTA_END                          |
-   |---------------------------------------->|  read back, CRC-32 whole image
-   |        OTA_STATUS state=READY err=0      |  (err=6 CRC if mismatch)
-   |<----------------------------------------|
+   |---------------------------------------->|  finalize SHA-256; verify hash +
+   |        OTA_STATUS state=READY err=0      |  signature + anti-rollback
+   |<----------------------------------------|  (err 6 HASH / 7 AUTH / 8 ROLLBACK)
    |                                         |
    |  user taps RESTART & APPLY              |
    |  WRITE OTA_APPLY                        |
-   |---------------------------------------->|  commit boot meta
-   |        ACK [0x0C]   (flushed first)     |
+   |---------------------------------------->|  bump sec-version, write signed
+   |        ACK [0x0C]   (flushed first)     |  manifest trailer (slot PENDING)
    |<----------------------------------------|
-   |                                  < MCU resets; bootloader runs new image >
+   |                          < MCU resets; bootloader verifies + runs new image;
+   |                            app confirms healthy boot -> slot VALID >
    |  BLE drops; app shows "restarting"      |
-   |  reconnect, GET_VERSION                 |
+   |  reconnect, authenticate, GET_VERSION   |
    |---------------------------------------->|
-   |        ACK [0,8,0]   (now up to date)   |
+   |        ACK [1,0,0]   (now up to date)   |
    |<----------------------------------------|
 
   Chunk pacing: send the next OTA_DATA only after the previous ACK (simple

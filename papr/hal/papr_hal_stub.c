@@ -2,6 +2,8 @@
 #include "papr_gdy1124.h"
 #include "papr_hal.h"
 #include "papr_sdp810.h"
+#include "papr_secure.h"
+#include "papr_sha256.h"
 
 #include <string.h>
 
@@ -281,10 +283,11 @@ papr_status_t papr_hal_ota_read(uint32_t offset, uint8_t *data, uint32_t len)
     return PAPR_OK;
 }
 
-papr_status_t papr_hal_ota_commit(uint32_t size, uint32_t crc32)
+papr_status_t papr_hal_ota_commit(const papr_img_manifest_t *manifest)
 {
-    s_ota_committed_size = size;
-    s_ota_committed_crc  = crc32;
+    if (manifest == NULL) { return PAPR_ERR_PARAM; }
+    s_ota_committed_size = manifest->image_size;
+    s_ota_committed_crc  = manifest->sec_version;
     s_ota_pending        = true;
     return PAPR_OK;
 }
@@ -328,6 +331,77 @@ papr_status_t papr_hal_prov_write(const uint8_t *data, uint32_t len)
     if (data == NULL || len > sizeof(s_prov_page)) { return PAPR_ERR_PARAM; }
     memcpy(s_prov_page, data, len);
     return PAPR_OK;
+}
+
+/* ---- Security stub --------------------------------------------------------
+ * Host-side reference of the security HAL. The asymmetric verify is modelled
+ * with HMAC-SHA256 (a real, deterministic, testable MAC) using a built-in
+ * vendor key; a production port replaces sec_verify with ECDSA-P256 /
+ * Ed25519 on the MCU crypto accelerator so no signing key lives on-device.
+ * Keys here are fixed test vectors — NEVER ship these. */
+
+static const uint8_t k_session_key[PAPR_SEC_KEY_LEN] = {
+    0x53,0x45,0x53,0x53,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0A,0x0B,0x0C,
+    0x0D,0x0E,0x0F,0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19,0x1A,0x1B,0x1C
+};
+static const uint8_t k_vendor_key[PAPR_SEC_KEY_LEN] = {
+    0x56,0x4E,0x44,0x52,0xA1,0xA2,0xA3,0xA4,0xA5,0xA6,0xA7,0xA8,0xA9,0xAA,0xAB,0xAC,
+    0xAD,0xAE,0xAF,0xB0,0xB1,0xB2,0xB3,0xB4,0xB5,0xB6,0xB7,0xB8,0xB9,0xBA,0xBB,0xBC
+};
+
+static uint32_t s_sec_version;          /* anti-rollback counter (RAM)       */
+static bool     s_debug_locked;
+static uint32_t s_rng_state = 0x12345678U;
+
+papr_status_t papr_hal_rng(uint8_t *out, uint32_t len)
+{
+    if (out == NULL) { return PAPR_ERR_PARAM; }
+    for (uint32_t i = 0U; i < len; ++i)
+    {
+        s_rng_state ^= s_rng_state << 13;
+        s_rng_state ^= s_rng_state >> 17;
+        s_rng_state ^= s_rng_state << 5;
+        out[i] = (uint8_t)s_rng_state;
+    }
+    return PAPR_OK;
+}
+
+papr_status_t papr_hal_sec_key_read(uint8_t key_id, uint8_t *out, uint32_t len)
+{
+    if (out == NULL || len > PAPR_SEC_KEY_LEN) { return PAPR_ERR_PARAM; }
+    if (key_id == PAPR_KEY_SESSION)      { memcpy(out, k_session_key, len); }
+    else if (key_id == PAPR_KEY_VENDOR)  { memcpy(out, k_vendor_key, len); }
+    else                                 { return PAPR_ERR_PARAM; }
+    return PAPR_OK;
+}
+
+bool papr_hal_sec_verify(const uint8_t digest[32], const uint8_t *sig, uint32_t sig_len)
+{
+    if (digest == NULL || sig == NULL || sig_len < 32U) { return false; }
+    uint8_t tag[PAPR_SHA256_DIGEST_LEN];
+    papr_hmac_sha256(k_vendor_key, sizeof(k_vendor_key), digest, 32U, tag);
+    return papr_ct_equal(tag, sig, PAPR_SHA256_DIGEST_LEN);
+}
+
+uint32_t papr_hal_sec_version_get(void) { return s_sec_version; }
+
+papr_status_t papr_hal_sec_version_set(uint32_t version)
+{
+    if (version > s_sec_version) { s_sec_version = version; }
+    return PAPR_OK;
+}
+
+papr_status_t papr_hal_secure_lock_debug(void)
+{
+    s_debug_locked = true;
+    return PAPR_OK;
+}
+
+bool papr_hal_debug_locked(void) { return s_debug_locked; }
+
+papr_status_t papr_hal_ota_confirm(void)
+{
+    return PAPR_OK;   /* no bootloader on host; nothing to confirm */
 }
 
 papr_status_t papr_hal_read_battery_mv(uint16_t *out)

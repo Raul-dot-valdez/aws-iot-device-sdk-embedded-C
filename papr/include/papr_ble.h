@@ -55,12 +55,26 @@ typedef enum
     PAPR_BLE_CMD_OTA_ABORT      = 0x0DU,    /* (none)                                */
     PAPR_BLE_CMD_OTA_STATUS     = 0x0EU,    /* (none) -> OTA_STATUS notify           */
 
+    /* Cybersecurity: session authentication + status. */
+    PAPR_BLE_CMD_AUTH_BEGIN     = 0x10U,    /* (none) -> AUTH_CHALLENGE              */
+    PAPR_BLE_CMD_AUTH_RESPONSE  = 0x11U,    /* [u8 tag[16]] -> ACK / NACK            */
+    PAPR_BLE_CMD_SEC_STATUS     = 0x12U,    /* (none) -> SEC_STATUS notify           */
+
     PAPR_BLE_NTF_TELEMETRY      = 0x80U,
     PAPR_BLE_NTF_ACK            = 0x81U,
     PAPR_BLE_NTF_NACK           = 0x82U,
     PAPR_BLE_NTF_EVENT          = 0x83U,
-    PAPR_BLE_NTF_OTA_STATUS     = 0x84U     /* [u8 state][u8 err][u8 pct][u8 maj,min,pat] */
+    PAPR_BLE_NTF_OTA_STATUS     = 0x84U,    /* [u8 state][u8 err][u8 pct][u8 maj,min,pat] */
+    PAPR_BLE_NTF_AUTH_CHALLENGE = 0x85U,    /* [u8 nonce[16]][u32 counter]           */
+    PAPR_BLE_NTF_SEC_STATUS     = 0x86U     /* [u8 auth_state][u8 flags][u16 fail][u16 reject] */
 } papr_ble_msg_t;
+
+/* NACK reasons. */
+#define PAPR_BLE_NACK_BAD_PAYLOAD  1U
+#define PAPR_BLE_NACK_UNKNOWN_CMD  2U
+#define PAPR_BLE_NACK_CRC          3U
+#define PAPR_BLE_NACK_AUTH_FAIL    4U
+#define PAPR_BLE_NACK_AUTH_REQ     5U
 
 typedef enum
 {

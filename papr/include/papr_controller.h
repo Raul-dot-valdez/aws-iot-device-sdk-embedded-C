@@ -8,6 +8,7 @@
 #include "papr_energy.h"
 #include "papr_keypad.h"
 #include "papr_ota.h"
+#include "papr_secure.h"
 #include "papr_sensors.h"
 #include "papr_types.h"
 #include "papr_version.h"
@@ -23,7 +24,9 @@ typedef struct papr_controller
     papr_ble_t          ble;
     papr_keypad_t       keypad;
     papr_energy_t       energy;
+    papr_secure_t       secure;
     papr_ota_t          ota;
+    bool                boot_confirmed;   /* OTA rollback confirmation done */
     uint32_t            last_control_ms;
     uint32_t            last_sensor_ms;
     uint32_t            last_wdt_ms;
@@ -78,9 +81,7 @@ void papr_controller_remote_set_auto(papr_controller_t *c, bool enabled);
  * never start while the blower is running. The controller also blocks the
  * blower from starting while an OTA transfer is in progress. */
 papr_ota_error_t papr_controller_ota_begin(papr_controller_t *c,
-                                           uint32_t image_size,
-                                           uint32_t image_crc32,
-                                           papr_fw_version_t incoming);
+                                           const papr_img_manifest_t *manifest);
 papr_ota_error_t papr_controller_ota_write(papr_controller_t *c,
                                            uint32_t offset,
                                            const uint8_t *data, uint16_t len);
@@ -97,5 +98,21 @@ void papr_controller_ota_status(const papr_controller_t *c,
                                 uint8_t *out_state,
                                 uint8_t *out_error,
                                 uint8_t *out_percent);
+
+/* ---- Cybersecurity: authenticated control (driven by the BLE dispatcher) -
+ * State-changing commands must be gated on papr_controller_control_allowed().
+ * The central authenticates with a challenge/response over the session key. */
+bool papr_controller_control_allowed(const papr_controller_t *c);
+bool papr_controller_auth_begin(papr_controller_t *c,
+                                uint8_t nonce_out[PAPR_SEC_NONCE_LEN],
+                                uint32_t *counter_out);
+bool papr_controller_auth_verify(papr_controller_t *c,
+                                 const uint8_t tag[PAPR_SEC_TAG_LEN]);
+void papr_controller_session_close(papr_controller_t *c);
+void papr_controller_sec_status(const papr_controller_t *c,
+                                uint8_t *out_auth_state,
+                                uint8_t *out_flags,
+                                uint16_t *out_auth_fail,
+                                uint16_t *out_ota_reject);
 
 #endif /* PAPR_CONTROLLER_H */

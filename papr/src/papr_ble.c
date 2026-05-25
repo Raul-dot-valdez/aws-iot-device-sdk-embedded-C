@@ -136,12 +136,57 @@ papr_status_t papr_ble_send_telemetry(papr_ble_t *b,
     return send_frame(PAPR_BLE_NTF_TELEMETRY, buf, (uint8_t)(p - buf));
 }
 
+static void send_sec_status(struct papr_controller *ctrl)
+{
+    uint8_t auth_state = 0U, flags = 0U;
+    uint16_t fail = 0U, reject = 0U;
+    papr_controller_sec_status(ctrl, &auth_state, &flags, &fail, &reject);
+    uint8_t p[6];
+    p[0] = auth_state;
+    p[1] = flags;
+    pack_u16_le(&p[2], fail);
+    pack_u16_le(&p[4], reject);
+    (void)send_frame(PAPR_BLE_NTF_SEC_STATUS, p, sizeof(p));
+}
+
+/* State-changing commands require an authenticated session; read-only and
+ * auth-handshake commands do not. */
+static bool is_control_cmd(uint8_t cmd)
+{
+    switch (cmd)
+    {
+        case PAPR_BLE_CMD_SET_LEVEL:
+        case PAPR_BLE_CMD_POWER_ON:
+        case PAPR_BLE_CMD_POWER_OFF:
+        case PAPR_BLE_CMD_MUTE_ALARM:
+        case PAPR_BLE_CMD_RESET_FAULT:
+        case PAPR_BLE_CMD_SET_AUTO_MODE:
+        case PAPR_BLE_CMD_OTA_BEGIN:
+        case PAPR_BLE_CMD_OTA_DATA:
+        case PAPR_BLE_CMD_OTA_END:
+        case PAPR_BLE_CMD_OTA_APPLY:
+        case PAPR_BLE_CMD_OTA_ABORT:
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* ---- Command dispatch ---------------------------------------------------- */
 
 static void dispatch(papr_ble_t *b, struct papr_controller *ctrl,
                      uint8_t cmd, const uint8_t *payload, uint8_t len)
 {
     (void)b;
+
+    /* Access control: gate every state-changing command behind an
+     * authenticated session (ETSI EN 303 645 5.5, IEC 62443 CR1/CR2). */
+    if (is_control_cmd(cmd) && !papr_controller_control_allowed(ctrl))
+    {
+        send_nack(cmd, PAPR_BLE_NACK_AUTH_REQ);
+        return;
+    }
+
     switch (cmd)
     {
         case PAPR_BLE_CMD_SET_LEVEL:
@@ -203,11 +248,21 @@ static void dispatch(papr_ble_t *b, struct papr_controller *ctrl,
 
         case PAPR_BLE_CMD_OTA_BEGIN:
         {
-            if (len != 11U) { send_nack(cmd, 1U); return; }
-            uint32_t size = unpack_u32_le(&payload[0]);
-            uint32_t crc  = unpack_u32_le(&payload[4]);
-            papr_fw_version_t ver = { payload[8], payload[9], payload[10] };
-            (void)papr_controller_ota_begin(ctrl, size, crc, ver);
+            /* Signed manifest: size(4) sec_version(4) maj,min,pat,sig_len(4)
+             * sha256(32) signature(64) = 108 bytes. */
+            if (len != 108U) { send_nack(cmd, 1U); return; }
+            papr_img_manifest_t m;
+            memset(&m, 0, sizeof(m));
+            m.magic       = PAPR_IMG_MAGIC;
+            m.image_size  = unpack_u32_le(&payload[0]);
+            m.sec_version = unpack_u32_le(&payload[4]);
+            m.fw_major    = payload[8];
+            m.fw_minor    = payload[9];
+            m.fw_patch    = payload[10];
+            m.sig_len     = payload[11];
+            memcpy(m.sha256,    &payload[12], PAPR_SHA256_LEN);
+            memcpy(m.signature, &payload[44], PAPR_SIG_MAXLEN);
+            (void)papr_controller_ota_begin(ctrl, &m);
             send_ota_status(ctrl);   /* reports RECEIVING or the error */
             break;
         }
@@ -255,8 +310,37 @@ static void dispatch(papr_ble_t *b, struct papr_controller *ctrl,
             send_ota_status(ctrl);
             break;
 
+        case PAPR_BLE_CMD_AUTH_BEGIN:
+        {
+            uint8_t  nonce[PAPR_SEC_NONCE_LEN];
+            uint32_t counter = 0U;
+            if (papr_controller_auth_begin(ctrl, nonce, &counter))
+            {
+                uint8_t p[PAPR_SEC_NONCE_LEN + 4U];
+                memcpy(p, nonce, PAPR_SEC_NONCE_LEN);
+                pack_u32_le(&p[PAPR_SEC_NONCE_LEN], counter);
+                (void)send_frame(PAPR_BLE_NTF_AUTH_CHALLENGE, p, sizeof(p));
+            }
+            else
+            {
+                send_nack(cmd, PAPR_BLE_NACK_AUTH_FAIL);   /* locked out */
+            }
+            break;
+        }
+
+        case PAPR_BLE_CMD_AUTH_RESPONSE:
+            if (len != PAPR_SEC_TAG_LEN) { send_nack(cmd, 1U); return; }
+            if (papr_controller_auth_verify(ctrl, payload)) { send_ack(cmd); }
+            else { send_nack(cmd, PAPR_BLE_NACK_AUTH_FAIL); }
+            send_sec_status(ctrl);
+            break;
+
+        case PAPR_BLE_CMD_SEC_STATUS:
+            send_sec_status(ctrl);
+            break;
+
         default:
-            send_nack(cmd, 2U);   /* unknown command */
+            send_nack(cmd, PAPR_BLE_NACK_UNKNOWN_CMD);
             break;
     }
 }

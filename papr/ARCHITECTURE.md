@@ -141,8 +141,13 @@ hardware to `l6235`; `energy` is a pure algorithm over values handed to it.
 
 ## 4. Boot & main loop
 
+In a dual-bank/secure build the bootloader (sec. 10) runs first on reset,
+verifies a slot's signed manifest, and jumps to that slot's vector table; the
+flow below is then the *application's* entry. In the single-image dev build
+the app is the reset image directly.
+
 ```
-  reset
+  [bootloader verifies + jumps]  ->  app vector table
     |
     v
   startup_gd32e51x.s  (vendor)  -> SystemInit() -> main()
@@ -346,6 +351,21 @@ Each entry: role, primary type, who owns it, and its HAL surface.
 |   types: papr_bist_report_t  HAL: every actuation/read group + uart +     |
 |                                   prov + ota_reboot                       |
 +---------------------------------------------------------------------------+
+| papr_sha256                owner: secure / ota / boot                     |
+|   Self-contained SHA-256 + HMAC-SHA256, known-answer self-test. No HAL    |
+|   deps, so the bootloader links it directly.                              |
++---------------------------------------------------------------------------+
+| papr_secure                owner: controller                             |
+|   Cybersecurity: HMAC challenge/response session auth gating control,     |
+|   signed + anti-rollback image verification, audit counters, lockout.     |
+|   type: papr_secure_t      HAL: rng, sec_key_read, sec_verify,            |
+|                                 sec_version_get/set, debug_locked          |
++---------------------------------------------------------------------------+
+| papr_boot (bootloader)     standalone image, not linked into the app      |
+|   Verified boot: re-checks each slot's manifest (image hash + vendor       |
+|   signature) every reset; one-try rollback (PENDING->TRYING->VALID);      |
+|   recovery loop if nothing verifies. Reuses papr_sha256 only.             |
++---------------------------------------------------------------------------+
 ```
 
 Leaf headers (no logic):
@@ -381,8 +401,10 @@ declaration in `papr_hal.h`; the entire stack above compiles unchanged.
    ui          led_set / buzzer_set / (legacy) button_* 
    safety      wdt_kick
    ota/flash   ota_slot_size / ota_erase / ota_write / ota_read /
-               ota_commit / ota_reboot
+               ota_commit / ota_reboot / ota_confirm
    test/prov   factory_requested / unique_id / prov_read / prov_write
+   security    rng / sec_key_read / sec_verify / sec_version_get/set /
+               secure_lock_debug / debug_locked
    lifecycle   init
 
   Two implementations ship:
@@ -419,37 +441,42 @@ flash erase/verify kick the watchdog directly, and an apply resets the MCU.
 
 ---
 
-## 10. OTA flash map
+## 10. OTA flash map + secure boot (rev 9)
 
 ```
   GD32E517RE flash, 512 KB
-  0x08000000  +-------------------+  bootloader (30 KB) — validates a slot,
-              |  bootloader       |   rolls back on a failed boot. Separate
-  0x08007800  +-------------------+   deliverable; firmware only writes the
-              |  provisioning 2KB |   boot metadata + resets.
-  0x08008000  +-------------------+  provisioning: serial/cal/MAC, written by
-              |  slot A (app)     |   the EOL station, OUTSIDE the slots so an
-              |   240 KB          |   OTA never erases unit identity (papr_
-              |   [.. meta page]  |   provision). last 2 KB of each slot:
-  0x08044000  +-------------------+   MAGIC | size | crc32 boot metadata.
+  0x08000000  +-------------------+  bootloader (28 KB): SHA-256 self-test,
+              |  bootloader       |   verifies each slot's signed manifest,
+  0x08007000  +-------------------+   one-try rollback, jumps to a slot.
+              |  boot-state page  |  mutable per-slot lifecycle + sec-version
+  0x08007800  +-------------------+   floor (bootloader/HAL rewrite it).
+              |  provisioning page|  serial / cal / KEYS, written by the EOL
+  0x08008000  +-------------------+   station; read-protected after test.
+              |  slot A (app)     |  238 KB app + 2 KB SIGNED manifest trailer
+              |  + manifest @end  |   (magic|size|sec_ver|fw|sha256|signature).
+  0x08044000  +-------------------+
               |  slot B (app)     |  the running image lives in one slot;
-              |   240 KB          |  papr_ota stages the new image into the
-              |   [.. meta page]  |  OTHER slot (chosen from SCB->VTOR).
-  0x08080000  +-------------------+
+              |  + manifest @end  |  papr_ota stages the new image into the
+  0x08080000  +-------------------+  OTHER slot (chosen from SCB->VTOR).
 
-  receive (RECEIVING)            apply (READY -> reset)
-   ble OTA_DATA                   ble OTA_APPLY
-      |                              |
-      v                              v
-   papr_ota_write                 papr_ota_apply
-      |                              |
-      v                              v
-   hal_ota_write(off)             hal_ota_commit(size,crc) -> hal_ota_reboot
-   into staging slot              writes meta page, NVIC reset
+  secure update + boot chain
+  --------------------------
+   OTA receive          OTA apply               next reset (bootloader)
+    ble OTA_DATA         ble OTA_APPLY            verify slot manifest:
+      |                    |                       sha(image)==manifest.sha?
+      v                    v                       sig(manifest) ok?
+   ota_write +          ota_finish: hash+sig+      sec_version >= floor?
+   sha256_update        rollback verify            |
+      |                    |                        +-- PENDING -> TRYING,
+      v                    v                        |   boot once
+   hal_ota_write        hal_ota_commit(manifest)    +-- app self-test ok ->
+   (staging slot)       -> slot PENDING                 ota_confirm -> VALID
+                        hal_ota_reboot              +-- no confirm -> rollback
 
-  Integrity:  whole-image CRC-32 verified from flash at OTA_END before READY.
-  Safety:     begin only in STANDBY; running image never erased; downgrade
-              rejected; bootloader rolls back if the new image fails to boot.
+  Integrity   SHA-256 over the image, verified at OTA_END and again at boot.
+  Authentic   vendor signature over the manifest (HMAC ref / ECDSA prod).
+  Anti-roll   monotonic sec_version floor; older images refused.
+  No-brick    running slot never erased; bad/unconfirmed image rolled back.
 ```
 
 ---
@@ -469,7 +496,13 @@ flash erase/verify kick the watchdog directly, and an apply resets the MCU.
     output : flashable ELF (GD-Link / J-Link / OpenOCD)
 
   papr_core  =  blower battery sensors alarms l6235 sdp810 gdy1124
-                ble keypad energy ota provision factory controller
+                ble keypad energy ota provision factory sha256 secure
+                controller
+
+  bootloader  =  boot/papr_boot.c + papr_sha256.c  (separate image,
+                 PAPR_BUILD_BOOTLOADER, linker/bootloader.ld)
+  app slots   =  PAPR_APP_SLOT=A|B -> linker/app_slot_{a,b}.ld
+                 (unset -> single-image dev build, gd32e517re.ld)
 ```
 
 ---
@@ -490,6 +523,7 @@ flash erase/verify kick the watchdog directly, and an apply resets the MCU.
   |    papr_sdp810.h papr_gdy1124.h                   (sensor drivers)
   |    papr_alarms.h papr_energy.h papr_keypad.h papr_ble.h papr_ota.h
   |    papr_provision.h papr_factory.h                (DFM / DFT)
+  |    papr_sha256.h papr_secure.h                    (cybersecurity)
   |- src/
   |    main.c            <entry: app vs factory mode>
   |    papr_controller.c <supervisor>
@@ -498,12 +532,19 @@ flash erase/verify kick the watchdog directly, and an apply resets the MCU.
   |    papr_sdp810.c papr_gdy1124.c
   |    papr_alarms.c papr_energy.c papr_keypad.c papr_ble.c papr_ota.c
   |    papr_provision.c papr_factory.c
+  |    papr_sha256.c papr_secure.c
+  |- boot/                                            (secure boot, rev 9)
+  |    boot_shared.h     image manifest + boot-state + flash map
+  |    papr_boot.c       standalone bootloader (GD32-guarded)
+  |- linker/
+  |    papr_sections.ld  shared SECTIONS body
+  |    bootloader.ld  app_slot_a.ld  app_slot_b.ld
   |- hal/
        papr_hal_stub.c               (HOST)
        gd32e517re/
          papr_hal_gd32e517re.c
          papr_pinmap.h
-         gd32e517re.ld
+         gd32e517re.ld                (single-image dev layout)
 ```
 
 ---
@@ -517,6 +558,8 @@ flash erase/verify kick the watchdog directly, and an apply resets the MCU.
   BLE wire protocol ............ README.md  "BLE wireless control"
   mobile app screens/use cases . README.md  "Mobile App Reference"
   OTA update flow .............. README.md  "OTA firmware update"
+  cybersecurity / auth ......... README.md  "Cybersecurity"
+  secure boot + dual-bank ...... README.md  "Secure boot & dual-bank"
   production test / station .... README.md  "Production test (DFM / DFT)"
   safety caveats ............... README.md  "Safety notes"
 ```

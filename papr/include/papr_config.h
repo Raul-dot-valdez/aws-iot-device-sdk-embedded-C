@@ -332,4 +332,32 @@
 #define PAPR_FACTORY_BATT_MAX_MV        17500U
 #endif
 
+/* ---- Cybersecurity --------------------------------------------------------
+ * Secure-by-default: enforcement is ON unless explicitly disabled at build
+ * time. See papr_secure.h and the README "Cybersecurity" section. */
+
+/* Require an authenticated BLE session before honouring state-changing
+ * commands (POWER, level, mute, auto, fault-reset, OTA). Telemetry stays open. */
+#ifndef PAPR_SEC_REQUIRE_AUTH
+#define PAPR_SEC_REQUIRE_AUTH          1
+#endif
+
+/* Require OTA images to be signed + hash-verified + anti-rollback-checked. */
+#ifndef PAPR_SEC_REQUIRE_SIGNED_OTA
+#define PAPR_SEC_REQUIRE_SIGNED_OTA    1
+#endif
+
+/* Consecutive auth failures before a temporary lockout, and the lockout. */
+#ifndef PAPR_SEC_AUTH_MAX_FAILS
+#define PAPR_SEC_AUTH_MAX_FAILS        5U
+#endif
+#ifndef PAPR_SEC_AUTH_LOCKOUT_MS
+#define PAPR_SEC_AUTH_LOCKOUT_MS       30000U
+#endif
+
+/* A challenge is only valid for this long before the central must restart. */
+#ifndef PAPR_SEC_CHALLENGE_TTL_MS
+#define PAPR_SEC_CHALLENGE_TTL_MS      10000U
+#endif
+
 #endif /* PAPR_CONFIG_H */

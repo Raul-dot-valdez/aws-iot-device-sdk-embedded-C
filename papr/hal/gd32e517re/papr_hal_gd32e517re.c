@@ -15,6 +15,10 @@
 #include "papr_config.h"
 #include "papr_hal.h"
 #include "papr_pinmap.h"
+#include "papr_secure.h"
+#include "papr_sha256.h"
+
+#include <string.h>
 
 /* ------------------------------------------------------------------------- */
 /* Globals                                                                   */
@@ -768,20 +772,93 @@ papr_status_t papr_hal_ota_read(uint32_t offset, uint8_t *data, uint32_t len)
     return PAPR_OK;
 }
 
-papr_status_t papr_hal_ota_commit(uint32_t size, uint32_t crc32)
+/* Program an arbitrary byte buffer to flash as 32-bit words (caller has
+ * unlocked the FMC and erased the page). Trailing partial word padded 0xFF. */
+static papr_status_t fmc_program_buf(uint32_t addr, const uint8_t *data, uint32_t len)
 {
-    /* Write the boot metadata into the last page of the staging slot. The
-     * bootloader reads MAGIC + size + crc to decide whether to boot it and,
-     * after a successful boot, marks it as the new active slot. */
-    uint32_t meta = ota_staging_base() + OTA_SLOT_BYTES - OTA_FLASH_PAGE;
+    for (uint32_t i = 0U; i < len; i += 4U)
+    {
+        uint32_t word = 0xFFFFFFFFU;
+        uint32_t take = ((len - i) >= 4U) ? 4U : (len - i);
+        for (uint32_t b = 0U; b < take; ++b) { ((uint8_t *)&word)[b] = data[i + b]; }
+        if (fmc_word_program(addr + i, word) != FMC_READY) { return PAPR_ERR_HW; }
+    }
+    return PAPR_OK;
+}
+
+static uint8_t ota_staging_slot_index(void)
+{
+    return (ota_staging_base() == OTA_SLOT_A_BASE) ? 0U : 1U;
+}
+static uint8_t ota_running_slot_index(void)
+{
+    return (ota_running_slot_base() == OTA_SLOT_A_BASE) ? 0U : 1U;
+}
+
+/* Boot-state page (PAPR_BOOT_STATE_ADDR) holds the mutable per-slot lifecycle
+ * used by the bootloader. Rewritten (erase+program) on each transition. */
+static void boot_state_read(papr_boot_state_record_t *r)
+{
+    memcpy(r, (const void *)PAPR_BOOT_STATE_ADDR, sizeof(*r));
+    if (r->magic != PAPR_IMG_MAGIC)
+    {
+        memset(r, 0, sizeof(*r));
+        r->magic = PAPR_IMG_MAGIC;
+        r->slot_state[0] = PAPR_BOOT_VALID;   /* assume A is the factory image */
+        r->slot_state[1] = PAPR_BOOT_EMPTY;
+    }
+}
+
+static papr_status_t boot_state_write(const papr_boot_state_record_t *r)
+{
     fmc_unlock();
     papr_status_t rc = PAPR_OK;
-    if (fmc_page_erase(meta) != FMC_READY) { rc = PAPR_ERR_HW; }
-    if (rc == PAPR_OK && fmc_word_program(meta + 0U,  OTA_META_MAGIC) != FMC_READY) { rc = PAPR_ERR_HW; }
-    if (rc == PAPR_OK && fmc_word_program(meta + 4U,  size)           != FMC_READY) { rc = PAPR_ERR_HW; }
-    if (rc == PAPR_OK && fmc_word_program(meta + 8U,  crc32)          != FMC_READY) { rc = PAPR_ERR_HW; }
+    if (fmc_page_erase(PAPR_BOOT_STATE_ADDR) != FMC_READY) { rc = PAPR_ERR_HW; }
+    if (rc == PAPR_OK)
+    {
+        rc = fmc_program_buf(PAPR_BOOT_STATE_ADDR, (const uint8_t *)r, sizeof(*r));
+    }
     fmc_lock();
     return rc;
+}
+
+papr_status_t papr_hal_ota_commit(const papr_img_manifest_t *manifest)
+{
+    if (manifest == NULL) { return PAPR_ERR_PARAM; }
+
+    /* 1. write the signed manifest into the staging slot trailer page. */
+    uint32_t trailer = ota_staging_base() + PAPR_MANIFEST_OFFSET;
+    fmc_unlock();
+    papr_status_t rc = PAPR_OK;
+    if (fmc_page_erase(trailer) != FMC_READY) { rc = PAPR_ERR_HW; }
+    if (rc == PAPR_OK)
+    {
+        rc = fmc_program_buf(trailer, (const uint8_t *)manifest, sizeof(*manifest));
+    }
+    fmc_lock();
+    if (rc != PAPR_OK) { return rc; }
+
+    /* 2. mark the staged slot PENDING so the bootloader tries it next reset. */
+    papr_boot_state_record_t st;
+    boot_state_read(&st);
+    uint8_t s = ota_staging_slot_index();
+    st.slot_state[s]       = PAPR_BOOT_PENDING;
+    st.slot_sec_version[s] = manifest->sec_version;
+    st.try_count           = 0U;
+    return boot_state_write(&st);
+}
+
+papr_status_t papr_hal_ota_confirm(void)
+{
+    /* Mark the running slot VALID so the bootloader stops treating a freshly
+     * flashed image as on-trial (commits the rollback decision). */
+    papr_boot_state_record_t st;
+    boot_state_read(&st);
+    uint8_t r = ota_running_slot_index();
+    if (st.slot_state[r] == PAPR_BOOT_VALID) { return PAPR_OK; } /* nothing to do */
+    st.slot_state[r] = PAPR_BOOT_VALID;
+    st.try_count     = 0U;
+    return boot_state_write(&st);
 }
 
 void papr_hal_ota_reboot(void)
@@ -845,6 +922,109 @@ papr_status_t papr_hal_prov_write(const uint8_t *data, uint32_t len)
     }
     fmc_lock();
     return rc;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Security services                                                         */
+/* ------------------------------------------------------------------------- */
+/*
+ * Key storage: the provisioning page holds the per-unit session key and the
+ * vendor key after the provisioning record (which is < 0x100 bytes). The
+ * station programs them; the page is read-protected after final test.
+ */
+#define SEC_KEY_SESSION_ADDR  (PROV_PAGE_ADDR + 0x100U)
+#define SEC_KEY_VENDOR_ADDR   (PROV_PAGE_ADDR + 0x140U)
+
+papr_status_t papr_hal_sec_key_read(uint8_t key_id, uint8_t *out, uint32_t len)
+{
+    if (out == NULL || len > PAPR_SEC_KEY_LEN) { return PAPR_ERR_PARAM; }
+    uint32_t addr = (key_id == PAPR_KEY_SESSION) ? SEC_KEY_SESSION_ADDR
+                  : (key_id == PAPR_KEY_VENDOR)  ? SEC_KEY_VENDOR_ADDR : 0U;
+    if (addr == 0U) { return PAPR_ERR_PARAM; }
+    const uint8_t *src = (const uint8_t *)addr;
+    /* Blank (erased 0xFF) key slot -> not provisioned. */
+    uint8_t acc = 0xFFU;
+    for (uint32_t i = 0U; i < len; ++i) { out[i] = src[i]; acc &= src[i]; }
+    return (acc == 0xFFU) ? PAPR_ERR_NOT_READY : PAPR_OK;
+}
+
+/* Reference verify: HMAC-SHA256 over the digest with the vendor key. A
+ * production build replaces this with ECDSA-P256 / Ed25519 (vendor PUBLIC
+ * key in flash, private key only at the signing server) using the on-chip
+ * crypto accelerator, so no signing secret resides on the device. */
+bool papr_hal_sec_verify(const uint8_t digest[32], const uint8_t *sig, uint32_t sig_len)
+{
+    if (digest == NULL || sig == NULL || sig_len < 32U) { return false; }
+    uint8_t vkey[PAPR_SEC_KEY_LEN];
+    if (papr_hal_sec_key_read(PAPR_KEY_VENDOR, vkey, sizeof(vkey)) != PAPR_OK)
+    {
+        return false;
+    }
+    uint8_t tag[PAPR_SHA256_DIGEST_LEN];
+    papr_hmac_sha256(vkey, sizeof(vkey), digest, 32U, tag);
+    memset(vkey, 0, sizeof(vkey));
+    return papr_ct_equal(tag, sig, PAPR_SHA256_DIGEST_LEN);
+}
+
+/* SHA-256 DRBG seeded from the die UID + SysTick + a call counter. GD32E51x
+ * has no TRNG; production should also fold in ADC LSB noise at startup. */
+papr_status_t papr_hal_rng(uint8_t *out, uint32_t len)
+{
+    if (out == NULL) { return PAPR_ERR_PARAM; }
+    static uint32_t ctr = 0U;
+    while (len > 0U)
+    {
+        uint8_t seed[12 + 4 + 4];
+        papr_hal_unique_id(seed);
+        uint32_t t = (uint32_t)SysTick->VAL ^ s_tick_ms;
+        memcpy(&seed[12], &t, 4);
+        memcpy(&seed[16], &ctr, 4);
+        ctr++;
+        uint8_t block[PAPR_SHA256_DIGEST_LEN];
+        papr_sha256(seed, sizeof(seed), block);
+        uint32_t n = (len < sizeof(block)) ? len : (uint32_t)sizeof(block);
+        memcpy(out, block, n);
+        out += n;
+        len -= n;
+    }
+    return PAPR_OK;
+}
+
+/* Global anti-rollback floor stored in the boot-state record 'reserved'. */
+uint32_t papr_hal_sec_version_get(void)
+{
+    papr_boot_state_record_t st;
+    boot_state_read(&st);
+    return st.reserved;
+}
+
+papr_status_t papr_hal_sec_version_set(uint32_t version)
+{
+    papr_boot_state_record_t st;
+    boot_state_read(&st);
+    if (version <= st.reserved) { return PAPR_OK; }  /* monotonic only */
+    st.reserved = version;
+    return boot_state_write(&st);
+}
+
+papr_status_t papr_hal_secure_lock_debug(void)
+{
+    /* Raise flash security protection (read protection) so SWD cannot dump
+     * firmware or keys. The factory station calls this after final test.
+     * NOTE: on the GD32 the protection level is set via the option bytes;
+     * ob_security_protection_config(OB_LSPC/OB_HSPC) + a power cycle applies
+     * it. Use OB_HSPC only when the production flow can recover bricked DUTs. */
+    fmc_unlock();
+    ob_unlock();
+    ob_security_protection_config(OB_LSPC);
+    ob_lock();
+    fmc_lock();
+    return PAPR_OK;
+}
+
+bool papr_hal_debug_locked(void)
+{
+    return ob_spc_get() != FMC_NSPC;   /* not "no security protection" */
 }
 
 /* ------------------------------------------------------------------------- */

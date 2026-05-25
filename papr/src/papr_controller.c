@@ -111,7 +111,9 @@ papr_status_t papr_controller_init(papr_controller_t *c)
 
     (void)papr_keypad_init(&c->keypad);
     (void)papr_energy_init(&c->energy);
-    (void)papr_ota_init(&c->ota);
+    (void)papr_secure_init(&c->secure);
+    (void)papr_ota_init(&c->ota, &c->secure);
+    c->boot_confirmed = false;
 
     c->rc_power_on_pending    = false;
     c->rc_power_off_pending   = false;
@@ -180,6 +182,7 @@ static void handle_key_event(papr_controller_t *c,
             break;
 
         case PAPR_KEY_PAIR:
+            papr_secure_session_close(&c->secure);   /* drop any auth session */
             (void)papr_ble_module_reset(&c->ble);
             break;
 
@@ -318,6 +321,14 @@ papr_status_t papr_controller_step(papr_controller_t *c)
         case PAPR_STATE_SELF_TEST:
             if (run_self_test(c) == PAPR_OK)
             {
+                /* The image booted and passed self-test: confirm it to the
+                 * bootloader so a freshly-OTA'd, on-trial image is marked
+                 * VALID and won't be rolled back on the next reset. */
+                if (!c->boot_confirmed)
+                {
+                    (void)papr_hal_ota_confirm();
+                    c->boot_confirmed = true;
+                }
                 enter_state(c, PAPR_STATE_STANDBY);
             }
             else if ((uint32_t)(now - c->state_entered_ms) > 3000U)
@@ -466,14 +477,12 @@ void papr_controller_remote_set_auto(papr_controller_t *c, bool enabled)
 }
 
 papr_ota_error_t papr_controller_ota_begin(papr_controller_t *c,
-                                           uint32_t image_size,
-                                           uint32_t image_crc32,
-                                           papr_fw_version_t incoming)
+                                           const papr_img_manifest_t *manifest)
 {
     if (c == NULL) { return PAPR_OTA_ERR_STATE; }
     /* Idle == standby. Refuse while running, in alarm, self-test, etc. */
     bool idle = (c->state == PAPR_STATE_STANDBY);
-    return papr_ota_begin(&c->ota, image_size, image_crc32, incoming, idle);
+    return papr_ota_begin(&c->ota, manifest, idle);
 }
 
 papr_ota_error_t papr_controller_ota_write(papr_controller_t *c,
@@ -519,4 +528,42 @@ void papr_controller_ota_status(const papr_controller_t *c,
     if (out_state)   { *out_state   = (uint8_t)c->ota.state; }
     if (out_error)   { *out_error   = (uint8_t)c->ota.error; }
     if (out_percent) { *out_percent = papr_ota_progress_percent(&c->ota); }
+}
+
+bool papr_controller_control_allowed(const papr_controller_t *c)
+{
+    return (c != NULL) && papr_secure_control_allowed(&c->secure);
+}
+
+bool papr_controller_auth_begin(papr_controller_t *c,
+                                uint8_t nonce_out[PAPR_SEC_NONCE_LEN],
+                                uint32_t *counter_out)
+{
+    if (c == NULL) { return false; }
+    return papr_secure_auth_begin(&c->secure, papr_hal_now_ms(),
+                                  nonce_out, counter_out);
+}
+
+bool papr_controller_auth_verify(papr_controller_t *c,
+                                 const uint8_t tag[PAPR_SEC_TAG_LEN])
+{
+    if (c == NULL) { return false; }
+    return papr_secure_auth_verify(&c->secure, papr_hal_now_ms(), tag);
+}
+
+void papr_controller_session_close(papr_controller_t *c)
+{
+    if (c == NULL) { return; }
+    papr_secure_session_close(&c->secure);
+}
+
+void papr_controller_sec_status(const papr_controller_t *c,
+                                uint8_t *out_auth_state,
+                                uint8_t *out_flags,
+                                uint16_t *out_auth_fail,
+                                uint16_t *out_ota_reject)
+{
+    if (c == NULL) { return; }
+    papr_secure_status(&c->secure, out_auth_state, out_flags,
+                       out_auth_fail, out_ota_reject);
 }

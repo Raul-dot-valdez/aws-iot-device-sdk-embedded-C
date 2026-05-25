@@ -2,6 +2,7 @@
 #define PAPR_HAL_H
 
 #include "papr_types.h"
+#include "../boot/boot_shared.h"
 
 /* Hardware abstraction layer. Implement these symbols once per target MCU
  * (STM32, NXP Kinetis, NRF52, RP2040, ESP32 ...). The controller core is
@@ -99,15 +100,15 @@ void papr_hal_wdt_kick(void);
  *   write()      program len bytes at offset (offset+len within the slot;
  *                offset and len are PAPR_OTA_WRITE_ALIGN-aligned)
  *   read()       read back len bytes from offset (for CRC verification)
- *   commit()     persist the boot metadata (size + CRC + "pending" flag) so
- *                the bootloader runs the staged image on next reset
+ *   commit()     write the signed manifest into the staging slot trailer and
+ *                mark that slot PENDING so the bootloader tries it next reset
  *   reboot()     trigger a system reset (does not return on real hardware)
  */
 uint32_t      papr_hal_ota_slot_size(void);
 papr_status_t papr_hal_ota_erase(void);
 papr_status_t papr_hal_ota_write(uint32_t offset, const uint8_t *data, uint32_t len);
 papr_status_t papr_hal_ota_read(uint32_t offset, uint8_t *data, uint32_t len);
-papr_status_t papr_hal_ota_commit(uint32_t size, uint32_t crc32);
+papr_status_t papr_hal_ota_commit(const papr_img_manifest_t *manifest);
 void          papr_hal_ota_reboot(void);
 
 /* Production test / provisioning (Design-for-Test).
@@ -125,5 +126,34 @@ bool          papr_hal_factory_requested(void);
 void          papr_hal_unique_id(uint8_t out[12]);
 papr_status_t papr_hal_prov_read(uint8_t *data, uint32_t len);
 papr_status_t papr_hal_prov_write(const uint8_t *data, uint32_t len);
+
+/* Security services (cybersecurity).
+ *
+ *   rng()              cryptographically-usable random bytes (TRNG on the
+ *                      GD32; a documented PRNG fallback otherwise) for
+ *                      challenge nonces.
+ *   sec_key_read()     read a provisioned key by id (session / vendor) from
+ *                      protected storage. Returns PAPR_ERR_NOT_READY if the
+ *                      key slot is blank.
+ *   sec_verify()       verify a signature over a 32-byte digest against the
+ *                      vendor key. The reference HAL uses HMAC-SHA256 (a real,
+ *                      testable MAC); a production port swaps in ECDSA-P256 /
+ *                      Ed25519 on the MCU crypto accelerator so the private
+ *                      key never lives on the device.
+ *   sec_version_get/set  persistent monotonic anti-rollback counter.
+ *   secure_lock_debug()  permanently disable SWD / set readout protection
+ *                      (called by the factory station after final test).
+ *   ota_confirm()      mark the running slot VALID so the bootloader stops
+ *                      treating it as on-trial (rollback confirmation).
+ */
+papr_status_t papr_hal_rng(uint8_t *out, uint32_t len);
+papr_status_t papr_hal_sec_key_read(uint8_t key_id, uint8_t *out, uint32_t len);
+bool          papr_hal_sec_verify(const uint8_t digest[32],
+                                  const uint8_t *sig, uint32_t sig_len);
+uint32_t      papr_hal_sec_version_get(void);
+papr_status_t papr_hal_sec_version_set(uint32_t version);
+papr_status_t papr_hal_secure_lock_debug(void);
+bool          papr_hal_debug_locked(void);
+papr_status_t papr_hal_ota_confirm(void);
 
 #endif /* PAPR_HAL_H */
