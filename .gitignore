@@ -15,3 +15,6 @@ build/
 # Ignore certificate files
 *.pem
 *.crt
+
+# Ignore Arduino WiFi credentials (copy arduino_secrets.h.example instead)
+**/arduino_secrets.h
