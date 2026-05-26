@@ -25,7 +25,14 @@ so you can also drive it from `curl` or any HTTP client.
 
 ## Configure
 
-Edit `arduino_secrets.h` with your network credentials:
+Copy the template, then fill in your network credentials. The real
+`arduino_secrets.h` is git-ignored so your password is never committed:
+
+```bash
+cp arduino_secrets.h.example arduino_secrets.h
+```
+
+Edit `arduino_secrets.h`:
 
 ```c
 #define SECRET_SSID "your-wifi-ssid"
