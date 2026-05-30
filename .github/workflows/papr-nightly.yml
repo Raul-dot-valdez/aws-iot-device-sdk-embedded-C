@@ -1,0 +1,124 @@
+name: PAPR nightly cross-build
+
+# Best-effort full cross-compile of each GD32 port against the real vendor
+# SDK. Runs on a schedule and on demand. If the SDK URL repo variable isn't
+# set we skip the build with a clear warning rather than failing — the
+# fast PR lane already catches contract drift via the shim.
+#
+# Configure on the repo:
+#   Variables -> GD32E51X_SDK_URL   (zip URL for the GD32E51x firmware library)
+#                GD32E50X_SDK_URL   (zip URL for the GD32E50x firmware library)
+# If your SDK URLs require credentials, switch the vars: lookups to secrets:.
+
+on:
+  schedule:
+    - cron: '17 6 * * *'   # daily 06:17 UTC
+  workflow_dispatch:
+    inputs:
+      e51x_url:
+        description: 'Optional one-off override for the GD32E51x SDK zip URL'
+        required: false
+      e50x_url:
+        description: 'Optional one-off override for the GD32E50x SDK zip URL'
+        required: false
+
+jobs:
+  cross-build:
+    name: ${{ matrix.target }} cross-build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target:        GD32E517RE
+            sdk_dir_var:   GD32E51X_SDK_DIR
+            url_input:     e51x_url
+            url_var_name:  GD32E51X_SDK_URL
+          - target:        GD32E503CE
+            sdk_dir_var:   GD32E50X_SDK_DIR
+            url_input:     e50x_url
+            url_var_name:  GD32E50X_SDK_URL
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install arm-none-eabi-gcc + cmake
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi cmake build-essential unzip
+
+      - name: Resolve SDK URL
+        id: url
+        env:
+          E51X_VAR: ${{ vars.GD32E51X_SDK_URL }}
+          E50X_VAR: ${{ vars.GD32E50X_SDK_URL }}
+          OVERRIDE: ${{ matrix.target == 'GD32E517RE' && inputs.e51x_url || inputs.e50x_url }}
+        run: |
+          URL="$OVERRIDE"
+          if [ -z "$URL" ]; then
+            case "${{ matrix.target }}" in
+              GD32E517RE) URL="$E51X_VAR" ;;
+              GD32E503CE) URL="$E50X_VAR" ;;
+            esac
+          fi
+          if [ -z "$URL" ]; then
+            echo "::warning::No SDK URL configured for ${{ matrix.target }} (set vars.${{ matrix.url_var_name }})"
+            echo "have_url=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_url=true" >> "$GITHUB_OUTPUT"
+            # URL itself may be sensitive; do not log it.
+            echo "url<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$URL" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fetch + locate SDK
+        if: steps.url.outputs.have_url == 'true'
+        id: sdk
+        run: |
+          set -euo pipefail
+          mkdir -p sdk && cd sdk
+          curl --fail --location --silent --show-error \
+               --output sdk.zip "${{ steps.url.outputs.url }}"
+          unzip -q sdk.zip
+          rm sdk.zip
+          # The SDKs always contain a CMSIS/ subtree at the SDK root. Find it.
+          ROOT="$(find "$PWD" -maxdepth 4 -type d -name CMSIS -printf '%h\n' | head -1)"
+          if [ -z "$ROOT" ]; then
+            echo "Could not locate SDK root (no CMSIS/ found)" >&2
+            exit 1
+          fi
+          echo "sdk_dir=$ROOT" >> "$GITHUB_OUTPUT"
+
+      - name: Configure + build (bootloader + slot A + slot B)
+        if: steps.url.outputs.have_url == 'true'
+        run: |
+          set -euo pipefail
+          BUILD_ROOT="$PWD/build-${{ matrix.target }}"
+          SDK_DIR="${{ steps.sdk.outputs.sdk_dir }}"
+          TC="$PWD/papr/cmake/arm-none-eabi.cmake"
+          COMMON="-DCMAKE_TOOLCHAIN_FILE=$TC -DPAPR_TARGET=${{ matrix.target }} -D${{ matrix.sdk_dir_var }}=$SDK_DIR"
+
+          # Bootloader.
+          cmake -S papr -B "$BUILD_ROOT/bl" $COMMON -DPAPR_BUILD_BOOTLOADER=ON
+          cmake --build "$BUILD_ROOT/bl" --target papr_bootloader --parallel
+
+          # App linked for slot A and slot B (direct-XIP dual bank).
+          cmake -S papr -B "$BUILD_ROOT/a"  $COMMON -DPAPR_APP_SLOT=A
+          cmake --build "$BUILD_ROOT/a" --parallel
+          cmake -S papr -B "$BUILD_ROOT/b"  $COMMON -DPAPR_APP_SLOT=B
+          cmake --build "$BUILD_ROOT/b" --parallel
+
+      - name: Report sizes
+        if: steps.url.outputs.have_url == 'true'
+        run: |
+          BUILD_ROOT="$PWD/build-${{ matrix.target }}"
+          for elf in "$BUILD_ROOT/bl/papr_bootloader" \
+                     "$BUILD_ROOT/a/papr_firmware"   \
+                     "$BUILD_ROOT/b/papr_firmware"; do
+            [ -f "$elf" ] && arm-none-eabi-size --format=berkeley "$elf"
+          done
+
+      - name: Skipped notice
+        if: steps.url.outputs.have_url != 'true'
+        run: |
+          echo "::notice::SDK URL not configured for ${{ matrix.target }}; full cross-compile skipped. Set vars.${{ matrix.url_var_name }} to enable this lane."

@@ -1,0 +1,178 @@
+name: PAPR release
+
+# Tag-triggered cross-build + artifact publication. For each GD32 MCU target
+# this produces an `.elf`, `.bin`, and `.hex` for:
+#   - the standalone reference bootloader
+#   - the application linked for slot A (factory image)
+#   - the application linked for slot B (OTA target image)
+# plus a SHA-256 manifest of every file in the bundle. Artifacts attach to
+# the workflow run AND, for `papr-v*` / `v*` tags, become assets on the
+# matching GitHub Release.
+#
+# Notes:
+#   - Image signing is NOT done here (the vendor private key must never
+#     reach CI). The published .bin is the raw image; sign offline before
+#     OTA delivery; see the secure-OTA section in README.md.
+#   - Requires vars.GD32E51X_SDK_URL / vars.GD32E50X_SDK_URL to be set;
+#     without them the release fails fast.
+
+on:
+  push:
+    tags:
+      - 'papr-v*'
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      e51x_url:
+        description: 'Optional one-off override for the GD32E51x SDK zip URL'
+        required: false
+      e50x_url:
+        description: 'Optional one-off override for the GD32E50x SDK zip URL'
+        required: false
+
+jobs:
+  cross-build:
+    name: ${{ matrix.target }} release build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target:        GD32E517RE
+            sdk_dir_var:   GD32E51X_SDK_DIR
+            url_input:     e51x_url
+            url_var_name:  GD32E51X_SDK_URL
+          - target:        GD32E503CE
+            sdk_dir_var:   GD32E50X_SDK_DIR
+            url_input:     e50x_url
+            url_var_name:  GD32E50X_SDK_URL
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive release version
+        id: meta
+        run: |
+          # Strip any leading papr-v / v from the tag; fall back to "dev-<sha>"
+          # for workflow_dispatch (no tag).
+          REF="${GITHUB_REF##*/}"
+          case "$REF" in
+            papr-v*|v*) VER="${REF#papr-v}"; VER="${VER#v}" ;;
+            *)          VER="dev-${GITHUB_SHA:0:8}" ;;
+          esac
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Release version: $VER"
+
+      - name: Install arm-none-eabi-gcc + cmake
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi cmake build-essential unzip
+
+      - name: Resolve SDK URL
+        id: url
+        env:
+          E51X_VAR: ${{ vars.GD32E51X_SDK_URL }}
+          E50X_VAR: ${{ vars.GD32E50X_SDK_URL }}
+          OVERRIDE: ${{ matrix.target == 'GD32E517RE' && inputs.e51x_url || inputs.e50x_url }}
+        run: |
+          URL="$OVERRIDE"
+          if [ -z "$URL" ]; then
+            case "${{ matrix.target }}" in
+              GD32E517RE) URL="$E51X_VAR" ;;
+              GD32E503CE) URL="$E50X_VAR" ;;
+            esac
+          fi
+          if [ -z "$URL" ]; then
+            echo "::error::No SDK URL configured for ${{ matrix.target }} (set vars.${{ matrix.url_var_name }})"
+            exit 1
+          fi
+          echo "url<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$URL" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch + locate SDK
+        id: sdk
+        run: |
+          set -euo pipefail
+          mkdir -p sdk && cd sdk
+          curl --fail --location --silent --show-error \
+               --output sdk.zip "${{ steps.url.outputs.url }}"
+          unzip -q sdk.zip
+          rm sdk.zip
+          ROOT="$(find "$PWD" -maxdepth 4 -type d -name CMSIS -printf '%h\n' | head -1)"
+          if [ -z "$ROOT" ]; then
+            echo "::error::SDK archive did not contain a CMSIS/ tree"
+            exit 1
+          fi
+          echo "sdk_dir=$ROOT" >> "$GITHUB_OUTPUT"
+
+      - name: Build bootloader + slot A + slot B
+        run: |
+          set -euo pipefail
+          BUILD_ROOT="$PWD/build-${{ matrix.target }}"
+          SDK_DIR="${{ steps.sdk.outputs.sdk_dir }}"
+          TC="$PWD/papr/cmake/arm-none-eabi.cmake"
+          COMMON="-DCMAKE_TOOLCHAIN_FILE=$TC -DPAPR_TARGET=${{ matrix.target }} -D${{ matrix.sdk_dir_var }}=$SDK_DIR -DCMAKE_BUILD_TYPE=Release"
+
+          cmake -S papr -B "$BUILD_ROOT/bl" $COMMON -DPAPR_BUILD_BOOTLOADER=ON
+          cmake --build "$BUILD_ROOT/bl" --target papr_bootloader --parallel
+
+          cmake -S papr -B "$BUILD_ROOT/a"  $COMMON -DPAPR_APP_SLOT=A
+          cmake --build "$BUILD_ROOT/a" --parallel
+
+          cmake -S papr -B "$BUILD_ROOT/b"  $COMMON -DPAPR_APP_SLOT=B
+          cmake --build "$BUILD_ROOT/b" --parallel
+
+      - name: Stage artifacts
+        id: stage
+        run: |
+          set -euo pipefail
+          VER="${{ steps.meta.outputs.version }}"
+          TGT="${{ matrix.target }}"
+          BUILD_ROOT="$PWD/build-$TGT"
+          OUT="$PWD/release/papr-$TGT-$VER"
+          mkdir -p "$OUT"
+
+          # bootloader.{elf,bin,hex}, app-slotA.{elf,bin,hex}, app-slotB.{elf,bin,hex}
+          declare -A MAP=(
+            [bootloader]="$BUILD_ROOT/bl/papr_bootloader"
+            [app-slotA]="$BUILD_ROOT/a/papr_firmware"
+            [app-slotB]="$BUILD_ROOT/b/papr_firmware"
+          )
+          for name in "${!MAP[@]}"; do
+            elf="${MAP[$name]}"
+            [ -f "$elf" ] || { echo "missing $elf"; exit 1; }
+            cp  "$elf"                              "$OUT/$name.elf"
+            arm-none-eabi-objcopy -O binary "$elf"  "$OUT/$name.bin"
+            arm-none-eabi-objcopy -O ihex   "$elf"  "$OUT/$name.hex"
+            arm-none-eabi-size --format=berkeley "$elf" | tee -a "$OUT/sizes.txt"
+          done
+
+          # SHA-256 manifest for every published file.
+          ( cd "$OUT" && sha256sum *.elf *.bin *.hex sizes.txt | sort -k2 > SHA256SUMS )
+
+          # Pack to a single zip for downstream tooling.
+          ( cd "$PWD/release" && zip -qr "papr-$TGT-$VER.zip" "papr-$TGT-$VER" )
+          echo "artifact_dir=$OUT"                            >> "$GITHUB_OUTPUT"
+          echo "artifact_zip=$PWD/release/papr-$TGT-$VER.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: papr-${{ matrix.target }}-${{ steps.meta.outputs.version }}
+          path: ${{ steps.stage.outputs.artifact_dir }}
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Attach to GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.stage.outputs.artifact_zip }}
+            ${{ steps.stage.outputs.artifact_dir }}/SHA256SUMS
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
