@@ -711,11 +711,11 @@ papr_status_t papr_hal_ota_read(uint32_t offset, uint8_t *data, uint32_t len)
 
 static uint8_t ota_staging_slot_index(void)
 {
-    return (ota_staging_base() == PAPR_SLOT_A_ADDR) ? 0U : 1U;
+    return (uint8_t)((ota_staging_base() == PAPR_SLOT_A_ADDR) ? 0U : 1U);
 }
 static uint8_t ota_running_slot_index(void)
 {
-    return (ota_running_slot_base() == PAPR_SLOT_A_ADDR) ? 0U : 1U;
+    return (uint8_t)((ota_running_slot_base() == PAPR_SLOT_A_ADDR) ? 0U : 1U);
 }
 
 static void boot_state_read(papr_boot_state_record_t *r)

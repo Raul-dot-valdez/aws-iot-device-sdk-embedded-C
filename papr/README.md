@@ -138,6 +138,22 @@ OpenOCD. Pick the variant that matches the BOM; the application code does not
 change. Add `-DPAPR_APP_SLOT=A|B` and/or `-DPAPR_BUILD_BOOTLOADER=ON` for the
 dual-bank / secure-boot layouts (rev 9).
 
+### Continuous integration
+
+`.github/workflows/papr-ci.yml` runs three lanes on every push / PR that
+touches `papr/`:
+
+```
+  host-build       cmake + make + 2-second smoke run of papr_firmware
+  GD32E517RE       gcc -fsyntax-only on the HAL + bootloader against a
+  GD32E503CE        permissive vendor-SDK shim (papr/ci/gd32_shim/)
+```
+
+The MCU lanes are a syntax check, not a flashable build — their purpose is to
+catch the most common regression class: refactoring the `papr_hal` contract
+and forgetting to update one of the ports. See `papr/ci/gd32_shim/gd32_periph.h`
+for what the shim is and is NOT.
+
 ## GD32E517RE pin map (LQFP64, 51 GPIO available)
 
 | Function              | Port / Pin     | Peripheral          |

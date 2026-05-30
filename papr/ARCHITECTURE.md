@@ -549,6 +549,9 @@ flash erase/verify kick the watchdog directly, and an apply resets the MCU.
   |- boot/                                            (secure boot, rev 9)
   |    boot_shared.h     image manifest + boot-state + flash map
   |    papr_boot.c       standalone bootloader (GD32-guarded)
+  |- ci/
+  |    gd32_shim/        permissive vendor-SDK shim for CI syntax-check
+  |                      (NOT a working SDK — see gd32_periph.h)
   |- linker/
   |    papr_sections.ld  shared SECTIONS body
   |    bootloader.ld  app_slot_a.ld  app_slot_b.ld   (GD32E517RE)
@@ -577,6 +580,7 @@ flash erase/verify kick the watchdog directly, and an apply resets the MCU.
   cybersecurity / auth ......... README.md  "Cybersecurity"
   secure boot + dual-bank ...... README.md  "Secure boot & dual-bank"
   production test / station .... README.md  "Production test (DFM / DFT)"
+  CI lanes (host + GD32 ports) . README.md  "Continuous integration"
   safety caveats ............... README.md  "Safety notes"
 ```
 

@@ -19,9 +19,15 @@
  *   PAPR_BOOT_REQUIRE_SIG (default 1): refuse images that fail signature
  *   verification. Set to 0 only for un-provisioned bring-up boards. */
 
-#ifdef GD32E51X
+#if defined(GD32E51X) || defined(GD32E50X)
 
-#include "gd32e51x.h"
+/* Pick the right GigaDevice family header. The FMC + CMSIS API is identical
+ * across both, so the rest of this file does not branch on the target. */
+#if defined(GD32E50X)
+#  include "gd32e50x.h"
+#else
+#  include "gd32e51x.h"
+#endif
 #include "boot_shared.h"
 #include "papr_sha256.h"
 
@@ -208,4 +214,4 @@ int main(void)
     return 0;   /* unreachable */
 }
 
-#endif /* GD32E51X */
+#endif /* GD32E51X || GD32E50X */

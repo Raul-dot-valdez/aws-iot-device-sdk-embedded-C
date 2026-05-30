@@ -1,0 +1,121 @@
+name: PAPR CI
+
+# Catch the two common regression classes for the PAPR firmware:
+#   1. Anything that breaks the host build (papr_core + simulation HAL).
+#   2. Anything that breaks one of the GD32 HAL ports — refactoring the
+#      papr_hal contract and forgetting to update GD32E517RE or GD32E503CE
+#      is the easiest way to silently rot a port, since neither is built
+#      in the default host CI.
+#
+# The MCU ports are syntax-checked (gcc -fsyntax-only) against a permissive
+# vendor-SDK shim under papr/ci/gd32_shim/ — see that header for what the
+# shim is and is NOT. That catches missing declarations / signature drift /
+# typos without needing to install (or licence) the real GigaDevice SDKs.
+
+on:
+  push:
+    branches: [ main, master, "claude/**" ]
+    paths:
+      - "papr/**"
+      - ".github/workflows/papr-ci.yml"
+  pull_request:
+    paths:
+      - "papr/**"
+      - ".github/workflows/papr-ci.yml"
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Host build: native compile of papr_core + simulation HAL stub, then a
+  # 2-second smoke run of papr_firmware to confirm it doesn't crash at start.
+  # ---------------------------------------------------------------------------
+  host-build:
+    name: Host build + smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential
+
+      - name: Configure
+        run: cmake -S papr -B papr/build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build papr/build --parallel
+
+      - name: Smoke run (2 s)
+        run: |
+          # 124 = SIGTERM from `timeout` = supervisor loop is alive.
+          set +e
+          timeout 2 ./papr/build/papr_firmware
+          rc=$?
+          echo "exit=$rc"
+          if [ "$rc" -ne 124 ]; then
+            echo "Firmware exited prematurely (rc=$rc)" >&2
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # GD32 MCU ports: syntax-check the HAL implementation + the standalone
+  # reference bootloader for each target, against the permissive vendor-SDK
+  # shim. This is NOT a working build — never deploy ELFs from this lane —
+  # but it does catch papr_hal contract drift between revisions.
+  # ---------------------------------------------------------------------------
+  gd32-syntax:
+    name: GD32 ${{ matrix.target }} syntax-check
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # GD32E517RE: LQFP64 / 512 KB / 240 KB slots / 2 KB flash page
+          - target: GD32E517RE
+            family_define: GD32E51X
+            mcu_define:    GD32E517
+            shim_header:   gd32e51x.h
+            hal_dir:       hal/gd32e517re
+            hal_src:       hal/gd32e517re/papr_hal_gd32e517re.c
+            slot_overrides: ""
+          # GD32E503CE: LQFP48 / 256 KB / 112 KB slots / 1 KB flash page
+          - target: GD32E503CE
+            family_define: GD32E50X
+            mcu_define:    GD32E503
+            shim_header:   gd32e50x.h
+            hal_dir:       hal/gd32e503ce
+            hal_src:       hal/gd32e503ce/papr_hal_gd32e503ce.c
+            slot_overrides: -DPAPR_FLASH_PAGE=1024U -DPAPR_SLOT_SIZE=114688U -DPAPR_SLOT_B_ADDR=0x08024000U
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host toolchain
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
+      - name: Confirm shim header exists
+        run: test -f papr/ci/gd32_shim/${{ matrix.shim_header }}
+
+      - name: Syntax-check HAL (${{ matrix.target }})
+        working-directory: papr
+        run: |
+          cc -fsyntax-only -std=c11 \
+             -Wall -Wextra -Wpedantic -Wshadow -Wconversion \
+             -Wno-int-to-pointer-cast \
+             -D${{ matrix.family_define }} -D${{ matrix.mcu_define }} \
+             -DHXTAL_VALUE=25000000 \
+             ${{ matrix.slot_overrides }} \
+             -I ci/gd32_shim -I include -I ${{ matrix.hal_dir }} -I boot \
+             ${{ matrix.hal_src }}
+
+      - name: Syntax-check reference bootloader (${{ matrix.target }} layout)
+        working-directory: papr
+        run: |
+          cc -fsyntax-only -std=c11 \
+             -Wall -Wextra -Wpedantic -Wshadow -Wconversion \
+             -Wno-int-to-pointer-cast \
+             -D${{ matrix.family_define }} -D${{ matrix.mcu_define }} \
+             -DHXTAL_VALUE=25000000 \
+             ${{ matrix.slot_overrides }} \
+             -I ci/gd32_shim -I include -I boot \
+             boot/papr_boot.c

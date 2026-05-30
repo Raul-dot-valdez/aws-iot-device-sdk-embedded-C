@@ -23,11 +23,23 @@
 /* ---- Flash map override (256 KB) ----------------------------------------
  * Two app slots of 112 KB each fit alongside the 32 KB bootloader / state /
  * provisioning region. See boot/boot_shared.h for the meaning of each
- * symbol; these defines override the GD32E517RE defaults. */
-#define PAPR_FLASH_PAGE          1024U                   /* GD32E50x small bank: 1 KB */
+ * symbol; these defines override the GD32E517RE defaults. They go through
+ * #undef so the override is explicit no matter what include order pulled in
+ * boot_shared.h first. */
+#undef  PAPR_FLASH_PAGE
+#define PAPR_FLASH_PAGE          1024U   /* GD32E50x small bank: 1 KB pages   */
+#undef  PAPR_SLOT_SIZE
 #define PAPR_SLOT_SIZE           (112U * 1024U)
+#undef  PAPR_SLOT_A_ADDR
 #define PAPR_SLOT_A_ADDR         0x08008000U
+#undef  PAPR_SLOT_B_ADDR
 #define PAPR_SLOT_B_ADDR         0x08024000U
+/* PAPR_SLOT_APP_MAX and PAPR_MANIFEST_OFFSET in boot_shared.h are computed
+ * from the macros above; redefine them too so they pick up the new size. */
+#undef  PAPR_SLOT_APP_MAX
+#define PAPR_SLOT_APP_MAX        (PAPR_SLOT_SIZE - PAPR_FLASH_PAGE)
+#undef  PAPR_MANIFEST_OFFSET
+#define PAPR_MANIFEST_OFFSET     (PAPR_SLOT_SIZE - PAPR_FLASH_PAGE)
 
 /* ---- L6235 brushless DC driver ------------------------------------------- */
 

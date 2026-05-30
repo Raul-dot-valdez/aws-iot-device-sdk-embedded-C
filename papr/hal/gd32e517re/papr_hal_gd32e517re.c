@@ -788,11 +788,11 @@ static papr_status_t fmc_program_buf(uint32_t addr, const uint8_t *data, uint32_
 
 static uint8_t ota_staging_slot_index(void)
 {
-    return (ota_staging_base() == OTA_SLOT_A_BASE) ? 0U : 1U;
+    return (uint8_t)((ota_staging_base() == OTA_SLOT_A_BASE) ? 0U : 1U);
 }
 static uint8_t ota_running_slot_index(void)
 {
-    return (ota_running_slot_base() == OTA_SLOT_A_BASE) ? 0U : 1U;
+    return (uint8_t)((ota_running_slot_base() == OTA_SLOT_A_BASE) ? 0U : 1U);
 }
 
 /* Boot-state page (PAPR_BOOT_STATE_ADDR) holds the mutable per-slot lifecycle
