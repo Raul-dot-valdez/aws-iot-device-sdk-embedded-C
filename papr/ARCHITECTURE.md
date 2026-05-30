@@ -552,6 +552,9 @@ flash erase/verify kick the watchdog directly, and an apply resets the MCU.
   |- ci/
   |    gd32_shim/        permissive vendor-SDK shim for CI syntax-check
   |                      (NOT a working SDK — see gd32_periph.h)
+  |- cmake/
+  |    arm-none-eabi.cmake   CMake toolchain file for the cross-compile
+  |                          (used by nightly + release CI lanes)
   |- linker/
   |    papr_sections.ld  shared SECTIONS body
   |    bootloader.ld  app_slot_a.ld  app_slot_b.ld   (GD32E517RE)

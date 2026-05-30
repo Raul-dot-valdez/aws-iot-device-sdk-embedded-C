@@ -140,19 +140,50 @@ dual-bank / secure-boot layouts (rev 9).
 
 ### Continuous integration
 
-`.github/workflows/papr-ci.yml` runs three lanes on every push / PR that
-touches `papr/`:
+Three workflows live under `.github/workflows/`:
 
 ```
-  host-build       cmake + make + 2-second smoke run of papr_firmware
-  GD32E517RE       gcc -fsyntax-only on the HAL + bootloader against a
-  GD32E503CE        permissive vendor-SDK shim (papr/ci/gd32_shim/)
+  papr-ci.yml         per-PR / push fast lane (always runs)
+    - host build + 2-second smoke run of papr_firmware
+    - gcc -fsyntax-only on the GD32E517RE + GD32E503CE HALs and bootloader
+      against a permissive vendor-SDK shim (papr/ci/gd32_shim/)
+
+  papr-nightly.yml    scheduled best-effort full cross-compile
+    - daily 06:17 UTC + manual workflow_dispatch
+    - apt-installs arm-none-eabi-gcc, downloads the real GD32 SDKs (URLs
+      from vars.GD32E51X_SDK_URL / vars.GD32E50X_SDK_URL on the repo),
+      builds bootloader + slot-A app + slot-B app per MCU, reports sizes
+    - skips with a NOTICE (not a failure) when the SDK URLs aren't set
+
+  papr-release.yml    tag-triggered release build
+    - fires on push of papr-v*  /  v* tags + manual workflow_dispatch
+    - same cross-compile as nightly, but FAILS fast if SDK URLs missing
+    - produces .elf / .bin / .hex for {bootloader, app-slotA, app-slotB}
+      per MCU + SHA256SUMS + papr-<TARGET>-<VERSION>.zip
+    - attaches the zip and SHA256SUMS to the matching GitHub Release
+      (pre-release when the tag contains -rc / -beta / -alpha)
 ```
 
-The MCU lanes are a syntax check, not a flashable build — their purpose is to
-catch the most common regression class: refactoring the `papr_hal` contract
-and forgetting to update one of the ports. See `papr/ci/gd32_shim/gd32_periph.h`
-for what the shim is and is NOT.
+The shim is documented in `papr/ci/gd32_shim/gd32_periph.h` — it is *not* a
+working SDK and CI never deploys artifacts built against it. The fast lane
+catches `papr_hal` contract drift; the nightly catches real toolchain /
+vendor-SDK breakages; the release lane is the only path that produces
+flashable binaries.
+
+The arm-none-eabi cross-compile uses `papr/cmake/arm-none-eabi.cmake` as the
+CMake toolchain file. Locally:
+
+```sh
+cmake -S papr -B build \
+      -DCMAKE_TOOLCHAIN_FILE=papr/cmake/arm-none-eabi.cmake \
+      -DPAPR_TARGET=GD32E517RE -DPAPR_APP_SLOT=A \
+      -DGD32E51X_SDK_DIR=/path/to/GD32E51x_Firmware_Library
+cmake --build build
+```
+
+Image signing happens **off-CI** — the vendor private key must never reach
+the runner. Published `.bin` files are unsigned raw images; sign them at the
+release tool before OTA delivery (see "Cybersecurity / Keys & secrets").
 
 ## GD32E517RE pin map (LQFP64, 51 GPIO available)
 
