@@ -9,17 +9,19 @@ set(CMAKE_C_EXTENSIONS OFF)
 # Target selection
 #
 #   -DPAPR_TARGET=HOST          (default) build with the simulation stub
-#   -DPAPR_TARGET=GD32E517RE    cross-compile for the GigaDevice GD32E517RE
-#                               (requires CMAKE_TOOLCHAIN_FILE for
-#                                arm-none-eabi-gcc and -DGD32E51X_SDK_DIR)
+#   -DPAPR_TARGET=GD32E517RE    GD32E517RE port (LQFP64, 512 KB)
+#                               requires -DGD32E51X_SDK_DIR
+#   -DPAPR_TARGET=GD32E503CE    GD32E503CE port (LQFP48, 256 KB)
+#                               requires -DGD32E50X_SDK_DIR
+#   Both MCU targets need -DCMAKE_TOOLCHAIN_FILE pointing at arm-none-eabi-gcc.
 #
-# Dual-bank / secure-boot options (GD32E517RE only):
+# Dual-bank / secure-boot options (MCU targets):
 #   -DPAPR_APP_SLOT=A|B         link the application for flash slot A or B
 #                               (single-image dev build when unset)
 #   -DPAPR_BUILD_BOOTLOADER=ON  also build the standalone reference bootloader
 # ----------------------------------------------------------------------------
-set(PAPR_TARGET "HOST" CACHE STRING "Target platform: HOST or GD32E517RE")
-set_property(CACHE PAPR_TARGET PROPERTY STRINGS HOST GD32E517RE)
+set(PAPR_TARGET "HOST" CACHE STRING "Target platform")
+set_property(CACHE PAPR_TARGET PROPERTY STRINGS HOST GD32E517RE GD32E503CE)
 set(PAPR_APP_SLOT "" CACHE STRING "Application flash slot: A, B, or empty")
 set_property(CACHE PAPR_APP_SLOT PROPERTY STRINGS "" A B)
 option(PAPR_BUILD_BOOTLOADER "Build the standalone reference bootloader" OFF)
@@ -133,6 +135,89 @@ elseif(PAPR_TARGET STREQUAL "GD32E517RE")
             -Wl,--gc-sections
             -L${CMAKE_CURRENT_SOURCE_DIR}/linker
             -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/linker/bootloader.ld
+            --specs=nano.specs --specs=nosys.specs)
+    endif()
+
+elseif(PAPR_TARGET STREQUAL "GD32E503CE")
+    # Alternative MCU port — smaller LQFP48 / 256 KB sibling. The application
+    # code is identical (papr_core); only the HAL, pinmap, and flash map differ.
+    if(NOT DEFINED GD32E50X_SDK_DIR)
+        message(FATAL_ERROR
+            "PAPR_TARGET=GD32E503CE requires -DGD32E50X_SDK_DIR pointing at "
+            "the GigaDevice GD32E50x firmware library (containing CMSIS/, "
+            "GD32E50x_standard_peripheral/, and a startup_gd32e503_xb.s).")
+    endif()
+
+    add_executable(papr_firmware
+        src/main.c
+        hal/gd32e503ce/papr_hal_gd32e503ce.c
+        ${GD32E50X_SDK_DIR}/CMSIS/GD/GD32E50x/Source/system_gd32e50x.c
+        ${GD32E50X_SDK_DIR}/CMSIS/GD/GD32E50x/Source/GCC/startup_gd32e503_xb.s
+    )
+    target_compile_definitions(papr_firmware PRIVATE
+        GD32E50X
+        GD32E503
+        HXTAL_VALUE=25000000
+    )
+    target_include_directories(papr_firmware PRIVATE
+        hal/gd32e503ce
+        ${GD32E50X_SDK_DIR}/CMSIS
+        ${GD32E50X_SDK_DIR}/CMSIS/GD/GD32E50x/Include
+        ${GD32E50X_SDK_DIR}/GD32E50x_standard_peripheral/Include
+    )
+    file(GLOB GD32E50X_PERIPH_SRC
+        ${GD32E50X_SDK_DIR}/GD32E50x_standard_peripheral/Source/*.c)
+    target_sources(papr_firmware PRIVATE ${GD32E50X_PERIPH_SRC})
+
+    if(PAPR_APP_SLOT STREQUAL "A")
+        set(PAPR_APP_LD ${CMAKE_CURRENT_SOURCE_DIR}/hal/gd32e503ce/app_slot_a.ld)
+    elseif(PAPR_APP_SLOT STREQUAL "B")
+        set(PAPR_APP_LD ${CMAKE_CURRENT_SOURCE_DIR}/hal/gd32e503ce/app_slot_b.ld)
+    else()
+        set(PAPR_APP_LD ${CMAKE_CURRENT_SOURCE_DIR}/hal/gd32e503ce/gd32e503ce.ld)
+    endif()
+
+    target_compile_options(papr_firmware PRIVATE
+        -mcpu=cortex-m33 -mthumb -mfpu=fpv5-sp-d16 -mfloat-abi=hard
+        -ffunction-sections -fdata-sections -Os)
+    target_link_options(papr_firmware PRIVATE
+        -mcpu=cortex-m33 -mthumb -mfpu=fpv5-sp-d16 -mfloat-abi=hard
+        -Wl,--gc-sections
+        -L${CMAKE_CURRENT_SOURCE_DIR}/linker
+        -Wl,-T,${PAPR_APP_LD}
+        --specs=nano.specs --specs=nosys.specs)
+
+    target_link_libraries(papr_firmware PRIVATE papr_core)
+
+    if(PAPR_BUILD_BOOTLOADER)
+        add_executable(papr_bootloader
+            boot/papr_boot.c
+            src/papr_sha256.c
+            ${GD32E50X_SDK_DIR}/CMSIS/GD/GD32E50x/Source/system_gd32e50x.c
+            ${GD32E50X_SDK_DIR}/CMSIS/GD/GD32E50x/Source/GCC/startup_gd32e503_xb.s
+        )
+        # The GD32E503CE pin-map overrides PAPR_SLOT_* — propagate the same
+        # geometry into the bootloader so both sides agree on the flash layout.
+        target_compile_definitions(papr_bootloader PRIVATE
+            GD32E50X GD32E503 HXTAL_VALUE=25000000
+            PAPR_FLASH_PAGE=1024U
+            PAPR_SLOT_SIZE=114688U          # 112 KB
+            PAPR_SLOT_B_ADDR=0x08024000U)
+        target_include_directories(papr_bootloader PRIVATE
+            include boot
+            ${GD32E50X_SDK_DIR}/CMSIS
+            ${GD32E50X_SDK_DIR}/CMSIS/GD/GD32E50x/Include
+            ${GD32E50X_SDK_DIR}/GD32E50x_standard_peripheral/Include)
+        target_sources(papr_bootloader PRIVATE
+            ${GD32E50X_SDK_DIR}/GD32E50x_standard_peripheral/Source/gd32e50x_fmc.c)
+        target_compile_options(papr_bootloader PRIVATE
+            -mcpu=cortex-m33 -mthumb -mfpu=fpv5-sp-d16 -mfloat-abi=hard
+            -ffunction-sections -fdata-sections -Os)
+        target_link_options(papr_bootloader PRIVATE
+            -mcpu=cortex-m33 -mthumb -mfpu=fpv5-sp-d16 -mfloat-abi=hard
+            -Wl,--gc-sections
+            -L${CMAKE_CURRENT_SOURCE_DIR}/linker
+            -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/hal/gd32e503ce/bootloader.ld
             --specs=nano.specs --specs=nosys.specs)
     endif()
 

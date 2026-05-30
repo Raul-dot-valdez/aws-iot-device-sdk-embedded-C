@@ -17,9 +17,10 @@
  *   0.7.0  rev 7  OTA firmware update
  *   0.8.0  rev 8  production test + provisioning (DFM/DFT)
  *   0.9.0  rev 9  secure bootloader + dual bank + cybersecurity
+ *   0.10.0 rev 10 alternative MCU port: GD32E503CE (256 KB sibling)
  */
 #define PAPR_FW_VERSION_MAJOR   0U
-#define PAPR_FW_VERSION_MINOR   9U
+#define PAPR_FW_VERSION_MINOR   10U
 #define PAPR_FW_VERSION_PATCH   0U
 
 typedef struct

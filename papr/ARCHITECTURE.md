@@ -80,19 +80,22 @@ directly beneath; **only the HAL touches MCU registers**.
   |  HAL contract     papr_hal.h  (pure function declarations)    |
   +------------------------------+-------------------------------+
                                  |
-        +------------------------+------------------------+
-        |                                                 |
-  +-----v-------------------+                  +----------v--------------+
-  | hal/papr_hal_stub.c     |                  | hal/gd32e517re/         |
-  | host simulation         |                  | real silicon port       |
-  | (PAPR_TARGET=HOST)      |                  | (PAPR_TARGET=GD32E517RE)|
-  +-------------------------+                  +-------------------------+
-                                                          |
-                                               +----------v----------+
-                                               | GD32 SVD registers, |
-                                               | firmware library    |
-                                               +---------------------+
+        +-----------------------+----------+----------+----------+
+        |                       |          |          |          |
+  +-----v---------------+ +-----v--------+ +---------v----------+ |
+  | hal/papr_hal_stub.c | | hal/gd32e517re/ | hal/gd32e503ce/   | |
+  | host simulation     | | LQFP64 / 512 KB | LQFP48 / 256 KB   | |
+  | (PAPR_TARGET=HOST)  | | (=GD32E517RE)   | (=GD32E503CE)     | |
+  +---------------------+ +-----------------+-------------------+ |
+                                  |                   |           |
+                                  v                   v           |
+                              GD32E51x SDK        GD32E50x SDK    |
+                              (gd32e51x.h)        (gd32e50x.h)    |
 ```
+
+The bottom HAL row is open-ended on purpose: new MCU choices add a sibling
+directory under `hal/` and a `PAPR_TARGET=` value without touching anything
+above the HAL contract.
 
 `papr_config.h` and `papr_types.h` are leaf headers included everywhere
 (compile-time tuning + shared enums/structs); they sit beside every layer
@@ -488,21 +491,31 @@ flash erase/verify kick the watchdog directly, and an apply resets the MCU.
     sources: papr_core + src/main.c + hal/papr_hal_stub.c
     output : native ELF, runs the full firmware against simulated hardware
 
-  PAPR_TARGET = GD32E517RE
+  PAPR_TARGET = GD32E517RE      LQFP64, 512 KB, 128 KB SRAM
     requires: arm-none-eabi-gcc toolchain file + GD32E51X_SDK_DIR
-    sources: papr_core + src/main.c + hal/gd32e517re/* + GD32 startup
+    sources: papr_core + src/main.c + hal/gd32e517re/* + GD32E51x startup
     flags  : -mcpu=cortex-m33 -mfpu=fpv5-sp-d16 -mfloat-abi=hard
-    link   : hal/gd32e517re/gd32e517re.ld  (512K flash / 128K SRAM)
-    output : flashable ELF (GD-Link / J-Link / OpenOCD)
+    link   : hal/gd32e517re/gd32e517re.ld           (single-image dev), or
+             linker/{app_slot_a,b}.ld               (dual-bank)
+    app    : 240 KB slots; 2 KB flash page
+
+  PAPR_TARGET = GD32E503CE      LQFP48, 256 KB, 64 KB SRAM  (alternative MCU)
+    requires: arm-none-eabi-gcc toolchain file + GD32E50X_SDK_DIR
+    sources: papr_core + src/main.c + hal/gd32e503ce/* + GD32E50x startup
+    flags  : -mcpu=cortex-m33 -mfpu=fpv5-sp-d16 -mfloat-abi=hard
+    link   : hal/gd32e503ce/gd32e503ce.ld           (single-image dev), or
+             hal/gd32e503ce/{app_slot_a,b}.ld       (dual-bank)
+    app    : 112 KB slots; 1 KB flash page
+             (pinmap overrides PAPR_SLOT_* defaults in boot_shared.h)
 
   papr_core  =  blower battery sensors alarms l6235 sdp810 gdy1124
                 ble keypad energy ota provision factory sha256 secure
-                controller
+                controller          (same library for both MCU targets)
 
   bootloader  =  boot/papr_boot.c + papr_sha256.c  (separate image,
-                 PAPR_BUILD_BOOTLOADER, linker/bootloader.ld)
-  app slots   =  PAPR_APP_SLOT=A|B -> linker/app_slot_{a,b}.ld
-                 (unset -> single-image dev build, gd32e517re.ld)
+                 PAPR_BUILD_BOOTLOADER, per-MCU bootloader.ld)
+  app slots   =  PAPR_APP_SLOT=A|B -> per-MCU app_slot_{a,b}.ld
+                 (unset -> single-image dev build)
 ```
 
 ---
@@ -538,13 +551,16 @@ flash erase/verify kick the watchdog directly, and an apply resets the MCU.
   |    papr_boot.c       standalone bootloader (GD32-guarded)
   |- linker/
   |    papr_sections.ld  shared SECTIONS body
-  |    bootloader.ld  app_slot_a.ld  app_slot_b.ld
+  |    bootloader.ld  app_slot_a.ld  app_slot_b.ld   (GD32E517RE)
   |- hal/
-       papr_hal_stub.c               (HOST)
-       gd32e517re/
-         papr_hal_gd32e517re.c
-         papr_pinmap.h
-         gd32e517re.ld                (single-image dev layout)
+       papr_hal_stub.c                              (HOST)
+       gd32e517re/                                  (LQFP64 / 512 KB)
+         papr_hal_gd32e517re.c  papr_pinmap.h
+         gd32e517re.ld          (single-image dev layout)
+       gd32e503ce/                                  (LQFP48 / 256 KB)
+         papr_hal_gd32e503ce.c  papr_pinmap.h
+         gd32e503ce.ld          (single-image dev layout)
+         bootloader.ld  app_slot_a.ld  app_slot_b.ld (dual-bank)
 ```
 
 ---

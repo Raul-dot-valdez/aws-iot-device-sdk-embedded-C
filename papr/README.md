@@ -70,10 +70,16 @@ Reference firmware for a Powered Air-Purifying Respirator (PAPR) running on
     slot's signed manifest before running it (secure boot) and implements
     one-try rollback across two app slots. Dual-bank linker scripts
     (`linker/`) and CMake options build either slot plus the bootloader.
-    The firmware version is centralised in `papr_version.h` (currently
-    **v0.9.0**).
+- **Revision 10** — **alternative MCU port: GigaDevice GD32E503CE**
+  (Cortex-M33, LQFP48, 256 KB Flash / 64 KB SRAM). A parallel HAL under
+  `hal/gd32e503ce/` reuses the entire `papr_core` and the rev-9 bootloader
+  unchanged; `boot/boot_shared.h` is now parameterised so each MCU defines
+  its own flash map (the GD32E503CE port halves the slot size to 112 KB).
+  CMake `-DPAPR_TARGET=GD32E517RE` and `-DPAPR_TARGET=GD32E503CE` select
+  between the two ports. The firmware version is centralised in
+  `papr_version.h` (currently **v0.10.0**).
 
-  All revision-1 modules and headers remain in place; revisions 2-9 only
+  All revision-1 modules and headers remain in place; revisions 2-10 only
   added or extended functionality.
 
 ## Layout
@@ -82,12 +88,12 @@ Reference firmware for a Powered Air-Purifying Respirator (PAPR) running on
 papr/
 ├── include/                Public headers (config, types, HAL contract, modules)
 ├── src/                    Portable controller core (incl. L6235 driver)
+├── boot/                   Image manifest + reference bootloader (rev 9)
+├── linker/                 Shared SECTIONS body + GD32E517RE dual-bank scripts
 ├── hal/
 │   ├── papr_hal_stub.c     Host stub for verification builds
-│   └── gd32e517re/         GigaDevice GD32E517RE port (rev 3)
-│       ├── papr_pinmap.h
-│       ├── papr_hal_gd32e517re.c
-│       └── gd32e517re.ld
+│   ├── gd32e517re/         GD32E517RE port (rev 3, LQFP64, 512 KB)
+│   └── gd32e503ce/         GD32E503CE port (rev 10, LQFP48, 256 KB)
 └── CMakeLists.txt
 ```
 
@@ -102,7 +108,7 @@ cmake --build papr/build
 
 Produces `papr/build/papr_firmware` linked against the simulation HAL stub.
 
-### GD32E517RE target
+### GD32E517RE target (LQFP64 / 512 KB)
 
 Requires `arm-none-eabi-gcc` and the GigaDevice GD32E51x firmware library.
 
@@ -114,7 +120,23 @@ cmake -S papr -B papr/build-gd32 \
 cmake --build papr/build-gd32
 ```
 
-Produces an ELF that can be flashed with GD-Link, J-Link, or OpenOCD.
+### GD32E503CE target (LQFP48 / 256 KB) — rev 10 alternative MCU
+
+Same `papr_core`, smaller pin-count / smaller-flash sibling. Requires the
+**GD32E50x** firmware library (note: GD32**E50**x, not E51x).
+
+```sh
+cmake -S papr -B papr/build-503 \
+      -DCMAKE_TOOLCHAIN_FILE=path/to/arm-none-eabi.cmake \
+      -DPAPR_TARGET=GD32E503CE \
+      -DGD32E50X_SDK_DIR=path/to/GD32E50x_Firmware_Library
+cmake --build papr/build-503
+```
+
+Both MCU targets produce an ELF that can be flashed with GD-Link, J-Link, or
+OpenOCD. Pick the variant that matches the BOM; the application code does not
+change. Add `-DPAPR_APP_SLOT=A|B` and/or `-DPAPR_BUILD_BOOTLOADER=ON` for the
+dual-bank / secure-boot layouts (rev 9).
 
 ## GD32E517RE pin map (LQFP64, 51 GPIO available)
 
@@ -142,6 +164,49 @@ Produces an ELF that can be flashed with GD-Link, J-Link, or OpenOCD.
 
 Reserved package pins (VDD, VSS, VDDA, VSSA, VBAT, NRST, BOOT0) account
 for the remaining 13 of the 64 LQFP positions.
+
+## GD32E503CE pin map (LQFP48, alternative MCU)
+
+Same peripheral assignments as the GD32E517RE port wherever the package
+permits; pins shift only where LQFP48 does not bond out the original choice.
+
+| Function              | GD32E517RE  | GD32E503CE  | Note                  |
+| --------------------- | ----------- | ----------- | --------------------- |
+| L6235 VREF            | PA4         | PA4         | DAC0_OUT0             |
+| L6235 EN/FWD/BRAKE    | PB12/13/14  | PB12/13/14  | unchanged             |
+| L6235 DIAG            | PB15        | PB15        | EXTI15                |
+| L6235 TACHO           | PA8         | PA8         | TIMER1_CH0            |
+| Battery V/I, Flow, NTC| PA0..PA3    | PA0..PA3    | ADC0_IN0..3           |
+| Pressure I2C (SDP/GDY)| PB6 / PB7   | PB6 / PB7   | I2C0                  |
+| Power / Level buttons | PC13 / PB0  | PC13 / PB0  | unchanged             |
+| LED OK / Warn         | PB1 / PB2   | PB1 / PB2   | unchanged             |
+| **LED Fault**         | PB10        | **PA5**     | PB10 not bonded LQFP48 |
+| Buzzer (PWM)          | PA6         | PA6         | TIMER2_CH0            |
+| BLE UART TX/RX        | PA9 / PA10  | PA9 / PA10  | USART0                |
+| BLE RESET / WAKE      | PA11 / PA12 | PA11 / PA12 | unchanged             |
+| Keypad ROW0..2        | PB3 / PB4 / PB5  | PB3 / PB4 / PB5  | unchanged       |
+| **Keypad COL0..2**    | PB8 / PB9 / PB11 | **PA7 / PA15 / PB8** | LQFP48 reshuffle |
+| TEST_MODE pad         | PC12        | PC12        | unchanged             |
+| SWDIO / SWCLK         | PA13 / PA14 | PA13 / PA14 | debug                 |
+| HXTAL (25 MHz)        | PD0 / PD1   | PD0 / PD1   | RCU                   |
+| LXTAL (32.768 kHz)    | PC14 / PC15 | PC14 / PC15 | RTC                   |
+
+### GD32E503CE flash map (256 KB)
+
+```
+  0x08000000  bootloader            28 KB
+  0x08007000  boot-state page        2 KB  (mutable)
+  0x08007800  provisioning page      2 KB  (serial / cal / keys)
+  0x08008000  slot A (app)         112 KB  (last 1 KB = signed manifest)
+  0x08024000  slot B (app)         112 KB  (last 1 KB = signed manifest)
+  0x08040000  end
+```
+
+The reference bootloader and the OTA path pick these addresses up at compile
+time because `boot/boot_shared.h` defaults are overridden by
+`hal/gd32e503ce/papr_pinmap.h` (and the CMake bootloader build passes the
+same overrides via `-D`). No source change is needed when switching MCUs —
+only the `PAPR_TARGET=` choice in CMake.
 
 ## Modules
 
@@ -955,7 +1020,7 @@ payload byte:
   |  Breathing       18 /min             |  breaths_per_min
   |  State           RUNNING (3)         |  state
   |  Alarms          0x09                |  alarms (raw hex)
-  |  FW version      0.9.0               |  GET_VERSION ACK payload
+  |  FW version      0.10.0              |  GET_VERSION ACK payload
   |                                      |
   |  [  CLEAR FAULT  ]   (state==FAULT)  |  -> RESET_FAULT (0x05)
   +--------------------------------------+
@@ -968,7 +1033,7 @@ payload byte:
   |  < Home               Settings       |
   +--------------------------------------+
   |  Device         PAPR-7F3A            |
-  |  Firmware       v0.9.0               |   <- GET_VERSION
+  |  Firmware       v0.10.0               |   <- GET_VERSION
   |  Telemetry rate 500 ms (read-only)   |
   |                                      |
   |  [   RE-PAIR BLE MODULE   ]          |   (BLE PAIR key is on the unit;
@@ -991,8 +1056,8 @@ firmware never decides "newer exists" — it only reports what it runs.
   |  < Settings          Firmware        |      |  < Settings          Firmware        |
   +--------------------------------------+      +--------------------------------------+
   |                                      |      |                                      |
-  |   Installed     v0.9.0               |      |   Updating...   do NOT power off     |
-  |   Latest        v0.9.0   (available) |      |                                      |
+  |   Installed     v0.10.0               |      |   Updating...   do NOT power off     |
+  |   Latest        v0.10.0   (available) |      |                                      |
   |                                      |      |   [##########------]  58 %           |  <- OTA_STATUS.pct
   |   * Update can only run while the    |      |   1.2 MB / 2.0 MB                     |
   |     unit is OFF (standby).           |      |                                      |
@@ -1103,7 +1168,7 @@ All multi-byte integers are little-endian.
    |-------------------------------->|
    |  WRITE GET_VERSION (0x06)       |   (read-only, no auth needed)
    |-------------------------------->|
-   |        ACK [0,9,0]              |
+   |        ACK [0,10,0]              |
    |<--------------------------------|
    |  -- authenticate before control --
    |  WRITE AUTH_BEGIN (0x10)        |
@@ -1194,7 +1259,7 @@ All multi-byte integers are little-endian.
 
 ```
   app                                   firmware
-   |  Settings: Installed v0.9.0             |
+   |  Settings: Installed v0.10.0             |
    |  server: latest=v1.0.0, fetch signed    |
    |   image + manifest (size, sha256, sig)  |
    |  authenticate (AUTH_BEGIN/RESPONSE)     |   control requires a session
