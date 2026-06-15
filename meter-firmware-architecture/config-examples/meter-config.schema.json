@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/meter-config.schema.json",
+  "title": "Smart Meter Variant & Grid Configuration",
+  "description": "Validated configuration contract carried in the Device Shadow desired state. Resolved at boot and on every desired-state change (see 03-variant-configuration.md).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["variant", "gridProfile", "evReady", "reporting", "features", "metrology"],
+  "properties": {
+    "variant": {
+      "type": "string",
+      "enum": ["residential", "commercial"],
+      "description": "Top-level feature bundle selector."
+    },
+    "gridProfile": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Regional tariff/grid/regulatory profile id, e.g. us-ca-pge."
+    },
+    "evReady": {
+      "type": "boolean",
+      "description": "Enables the EV/DER feature group (forces four-quadrant accounting)."
+    },
+    "reporting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interval_s"],
+      "properties": {
+        "interval_s": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 3600,
+          "description": "Telemetry interval. Default 900 (res) / 300 (comm)."
+        },
+        "pq_stream": {
+          "type": "boolean",
+          "default": false,
+          "description": "Stream high-rate power-quality data (commercial typical)."
+        }
+      }
+    },
+    "tariff": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "plan": { "type": "string" },
+        "schedule_ref": { "type": "string" },
+        "demand_charge": { "type": "boolean", "default": false }
+      }
+    },
+    "dr": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enrolled": { "type": "boolean", "default": false },
+        "programs": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["four_quadrant"],
+      "properties": {
+        "demand_register": { "type": "boolean", "default": false },
+        "four_quadrant": { "type": "boolean" },
+        "load_limit": { "type": "boolean", "default": false },
+        "v2g_authorization": { "type": "boolean", "default": false }
+      }
+    },
+    "metrology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phases", "ct_ratio"],
+      "properties": {
+        "phases": {
+          "type": "string",
+          "enum": ["single", "split", "three"],
+          "description": "Physical wiring; must be supported by the hardware (calibration-locked)."
+        },
+        "ct_ratio": {
+          "type": "number",
+          "minimum": 1,
+          "description": "Current-transformer ratio. 1 = direct/whole-current (residential)."
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "evReady": { "const": true } } },
+      "then": {
+        "properties": { "features": { "properties": { "four_quadrant": { "const": true } } } },
+        "description": "EV-ready meters must enable four-quadrant accounting."
+      }
+    },
+    {
+      "if": { "properties": { "variant": { "const": "commercial" } } },
+      "then": {
+        "properties": {
+          "features": { "properties": { "demand_register": { "const": true } } },
+          "metrology": { "properties": { "phases": { "const": "three" } } }
+        },
+        "description": "Commercial meters use polyphase metrology and a demand register."
+      }
+    }
+  ]
+}
