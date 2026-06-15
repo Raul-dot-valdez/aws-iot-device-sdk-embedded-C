@@ -38,7 +38,9 @@ already vendored here — `coreMQTT`, `coreHTTP`, `coreJSON`, `corePKCS11`,
 | 11 | [Testing, Validation & Certification](11-testing-validation-certification.md) | Test pyramid on this repo's harness, EV-era test cases, certification gates |
 
 Diagrams are authored in [Mermaid](https://mermaid.js.org/) and render directly
-on GitHub. Reusable config snippets live in [`config-examples/`](config-examples/).
+on GitHub. Reusable config snippets live in [`config-examples/`](config-examples/),
+and compile-checkable C interface contracts for the HAL and device services live
+in [`reference-src/`](reference-src/) (run `make check`).
 
 ---
 
