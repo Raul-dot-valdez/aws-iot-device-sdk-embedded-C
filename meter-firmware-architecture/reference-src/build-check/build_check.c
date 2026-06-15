@@ -15,6 +15,11 @@
 #include "services/dr_v2g_controller.h"
 #include "services/telemetry_service.h"
 
+/* Concrete GD32W515 port declarations - proves the port header stays coherent
+ * with the HAL contracts (12-gigadevice-gd32w515-platform.md). Declaration-only,
+ * so no GD32W51x SDK is needed in CI. */
+#include "../ports/gd32w515/gd32w515_port.h"
+
 #include <string.h>
 #include <stdio.h>
 

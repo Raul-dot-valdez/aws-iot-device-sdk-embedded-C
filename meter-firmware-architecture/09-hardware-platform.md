@@ -66,12 +66,19 @@ flowchart LR
    not be starved by network work.
 5. **Second-sourceable** — at least two vendors can satisfy the abstraction.
 
+> **Selected application MCU (Revision B): GigaDevice GD32W515.** This design
+> now instantiates the secure-application-core class with a concrete part — the
+> GD32W515 (Cortex-M33, TrustZone, integrated Wi-Fi, hardware crypto, secure
+> boot) on the GD32W51x SDK. See
+> [12 — GD32W515 Platform](12-gigadevice-gd32w515-platform.md). It sits behind
+> the same HAL, so the candidates below remain valid second sources.
+
 **Families that satisfy the class** (validate live availability/lifecycle before a
 BOM commit — these are market facts as of early 2026, not a vendor endorsement):
 
 | Role | Candidates | Notes |
 |------|-----------|-------|
-| Secure application MCU | ST **STM32U5/STM32H5**, NXP **LPC55Sxx / Kinetis-M (KM3x)**, Renesas **RA6**, Microchip **PIC32CM / SAM L11** | Cortex-M33, TrustZone, PSA Certified |
+| Secure application MCU | **GigaDevice GD32W515** (selected, [doc 12](12-gigadevice-gd32w515-platform.md)), ST **STM32U5/STM32H5**, NXP **LPC55Sxx / Kinetis-M (KM3x)**, Renesas **RA6**, Microchip **PIC32CM / SAM L11** | Cortex-M33, TrustZone, PSA Certified |
 | Metrology AFE/SoC | Analog Devices **ADE9000/ADE7xxx**, TI **MSP430F67xx**, Renesas **RX23E**, ST **STPMxx** | Certified accuracy, polyphase, four-quadrant |
 | Single-chip metering SoC (cost-sensitive residential) | TI **MSP430 metering**, NXP **Kinetis-M**, ADI/Maxim **78M6xxx (Teridian)** | Integrate metrology + app |
 | Concentrator / DCU (mesh topology, [01 §3](01-grid-system-architecture.md)) | NXP **i.MX**, TI **Sitara** (Cortex-A, Linux + Greengrass) | Local DR/aggregation, store-and-forward |

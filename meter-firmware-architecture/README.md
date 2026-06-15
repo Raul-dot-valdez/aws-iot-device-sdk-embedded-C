@@ -18,6 +18,13 @@ already vendored here — `coreMQTT`, `coreHTTP`, `coreJSON`, `corePKCS11`,
 > strategy, the meter's role as an IoT node in the wider grid, and the exact
 > mapping onto the SDK libraries in `../libraries/`.
 
+**Revision history**
+
+| Rev | Change |
+|-----|--------|
+| A | Initial architecture: grid system, firmware/RTOS, variants, EV complexity, SDK integration, security, OTA, data model, HAL, interoperability, testing, reference interfaces |
+| B | Selected a concrete application MCU — **GigaDevice GD32W515 (Cortex-M33)** on the GD32W51x SDK — see [doc 12](12-gigadevice-gd32w515-platform.md); added the GD32W515 HAL port and a callout in [doc 09](09-hardware-platform.md) |
+
 ---
 
 ## How to read this
@@ -36,6 +43,7 @@ already vendored here — `coreMQTT`, `coreHTTP`, `coreJSON`, `corePKCS11`,
 | 09 | [Hardware Platform & HAL](09-hardware-platform.md) | MCU selection for the EV-saturated grid, HAL references, IR/optical port, billing channel |
 | 10 | [Interoperability & Standards](10-interoperability-and-standards.md) | DLMS/COSEM, ISO 15118, OCPP, IEEE 2030.5, OpenADR — what the meter terminates vs interworks |
 | 11 | [Testing, Validation & Certification](11-testing-validation-certification.md) | Test pyramid on this repo's harness, EV-era test cases, certification gates |
+| 12 | [GD32W515 Platform (Rev B)](12-gigadevice-gd32w515-platform.md) | Concrete MCU selection: GigaDevice GD32W515 Cortex-M33 + GD32W51x SDK, TrustZone, Wi-Fi, HAL port |
 
 Diagrams are authored in [Mermaid](https://mermaid.js.org/) and render directly
 on GitHub. Reusable config snippets live in [`config-examples/`](config-examples/),
