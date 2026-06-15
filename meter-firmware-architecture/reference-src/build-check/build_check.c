@@ -23,6 +23,9 @@
 /* Secure-world NSC boundary (14-tfm-secure-partition-layout.md). */
 #include "secure/meter_secure_api.h"
 
+/* eFuse/OTP descriptor + PSA lifecycle (15-tfm-efuse-secure-boot-provisioning.md). */
+#include "secure/efuse_map.h"
+
 #include <string.h>
 #include <stdio.h>
 
@@ -142,6 +145,31 @@ MeterStatus_t meter_secure_get_tamper( uint32_t * pFlags )
     return METER_OK;
 }
 
+/* --- eFuse stubs: enforce monotonic lifecycle + anti-rollback floor ------- */
+
+static EfuseLifecycle_t g_lcs = LCS_SECURED;     /* a deployed field device   */
+static uint32_t g_arFloorNspe = 5U;              /* fused min NSPE version     */
+
+MeterStatus_t Efuse_GetLifecycle( EfuseLifecycle_t * pState )
+{
+    if( !pState ) { return METER_ERR_PARAM; }
+    *pState = g_lcs;
+    return METER_OK;
+}
+
+MeterStatus_t Efuse_AdvanceLifecycle( EfuseLifecycle_t target )
+{
+    if( target <= g_lcs ) { return METER_ERR_STATE; } /* never regress/skip-back */
+    g_lcs = target;
+    return METER_OK;
+}
+
+MeterStatus_t Efuse_CheckAntiRollback( EfuseField_t counterField, uint32_t version )
+{
+    ( void ) counterField;
+    return ( version >= g_arFloorNspe ) ? METER_OK : METER_ERR_VALIDATION;
+}
+
 /* --- wiring sanity: build a config, validate, query a feature, run DR ----- */
 
 int main( void )
@@ -191,12 +219,22 @@ int main( void )
     uint32_t tamper = 0xFFFFFFFFu;
     meter_secure_get_tamper( &tamper );
 
+    /* eFuse rules: lifecycle cannot regress; downgrade below the floor fails. */
+    EfuseLifecycle_t lcs = LCS_CHIP_MANUFACTURE;
+    Efuse_GetLifecycle( &lcs );
+    int noRegress = ( Efuse_AdvanceLifecycle( LCS_ASSEMBLY_TEST ) == METER_ERR_STATE );
+    int rollbackBlocked = ( Efuse_CheckAntiRollback( EFUSE_AR_COUNTER_NSPE, 4U )
+                            == METER_ERR_VALIDATION );
+    int upgradeOk = ( Efuse_CheckAntiRollback( EFUSE_AR_COUNTER_NSPE, 6U ) == METER_OK );
+
     printf( "build-check OK: variant=%d evReady=%d v2g=%d compliant@5kW=%d "
-            "secure(denyUnproven=%d allowProven=%d tamper=%u)\n",
+            "secure(denyUnproven=%d allowProven=%d tamper=%u) "
+            "efuse(lcs=%d noRegress=%d rollbackBlocked=%d upgradeOk=%d)\n",
             ( int ) cfg.active.variant,
             ( int ) cfg.active.evReady,
             ( int ) Config_FeatureEnabled( &cfg, METER_FEAT_V2G_AUTHORIZATION ),
             ( int ) Dr_IsCompliant( &dr, 5.0 ),
-            actDenied, actOk, ( unsigned ) tamper );
+            actDenied, actOk, ( unsigned ) tamper,
+            ( int ) lcs, noRegress, rollbackBlocked, upgradeOk );
     return 0;
 }
