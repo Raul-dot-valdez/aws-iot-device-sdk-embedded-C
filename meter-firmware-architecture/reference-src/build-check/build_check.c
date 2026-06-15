@@ -20,6 +20,9 @@
  * so no GD32W51x SDK is needed in CI. */
 #include "../ports/gd32w515/gd32w515_port.h"
 
+/* Secure-world NSC boundary (14-tfm-secure-partition-layout.md). */
+#include "secure/meter_secure_api.h"
+
 #include <string.h>
 #include <stdio.h>
 
@@ -103,6 +106,42 @@ MeterStatus_t Telemetry_PublishLastGasp( TelemetryService_t * s, MeterTimeMs_t t
 
 MeterStatus_t Telemetry_FlushBacklog( TelemetryService_t * s ) { ( void ) s; return METER_OK; }
 
+/* --- secure-world NSC stubs (SPE side; real impl lives in TF-M partitions) - */
+
+MeterStatus_t meter_secure_sign_revenue( const uint8_t * p, size_t n,
+                                         uint8_t * pSig, size_t * pSigLen )
+{
+    ( void ) p; ( void ) n; ( void ) pSig;
+    if( pSigLen ) { *pSigLen = 0U; }
+    return METER_OK;
+}
+
+MeterStatus_t meter_secure_actuate( SecureActuator_t action, double param,
+                                    const uint8_t * pProof, size_t proofLen )
+{
+    ( void ) param;
+    /* SPE rejects an unproven command - the app cannot bypass policy. */
+    if( ( pProof == NULL ) || ( proofLen == 0U ) )
+    {
+        return METER_ERR_VALIDATION;
+    }
+    return ( action <= SECURE_ACT_DR_V2G_WINDOW ) ? METER_OK : METER_ERR_PARAM;
+}
+
+MeterStatus_t meter_secure_get_attestation( const uint8_t * pC, size_t cn,
+                                            uint8_t * pTok, size_t * pTokLen )
+{
+    ( void ) pC; ( void ) cn; ( void ) pTok;
+    if( pTokLen ) { *pTokLen = 0U; }
+    return METER_OK;
+}
+
+MeterStatus_t meter_secure_get_tamper( uint32_t * pFlags )
+{
+    if( pFlags ) { *pFlags = 0U; }
+    return METER_OK;
+}
+
 /* --- wiring sanity: build a config, validate, query a feature, run DR ----- */
 
 int main( void )
@@ -142,10 +181,22 @@ int main( void )
         Dr_Apply( &dr, &cmd );
     }
 
-    printf( "build-check OK: variant=%d evReady=%d v2g=%d compliant@5kW=%d\n",
+    /* Exercise the secure NSC boundary: an unproven actuate is rejected, a
+     * proven one is accepted (14-tfm-secure-partition-layout.md). */
+    const uint8_t proof[ 8 ] = { 0 };
+    int actDenied = ( meter_secure_actuate( SECURE_ACT_RELAY_OPEN, 0.0, NULL, 0 )
+                      == METER_ERR_VALIDATION );
+    int actOk = ( meter_secure_actuate( SECURE_ACT_RELAY_OPEN, 0.0,
+                                        proof, sizeof( proof ) ) == METER_OK );
+    uint32_t tamper = 0xFFFFFFFFu;
+    meter_secure_get_tamper( &tamper );
+
+    printf( "build-check OK: variant=%d evReady=%d v2g=%d compliant@5kW=%d "
+            "secure(denyUnproven=%d allowProven=%d tamper=%u)\n",
             ( int ) cfg.active.variant,
             ( int ) cfg.active.evReady,
             ( int ) Config_FeatureEnabled( &cfg, METER_FEAT_V2G_AUTHORIZATION ),
-            ( int ) Dr_IsCompliant( &dr, 5.0 ) );
+            ( int ) Dr_IsCompliant( &dr, 5.0 ),
+            actDenied, actOk, ( unsigned ) tamper );
     return 0;
 }

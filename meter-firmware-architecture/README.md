@@ -24,6 +24,7 @@ already vendored here — `coreMQTT`, `coreHTTP`, `coreJSON`, `corePKCS11`,
 |-----|--------|
 | A | Initial architecture: grid system, firmware/RTOS, variants, EV complexity, SDK integration, security, OTA, data model, HAL, interoperability, testing, reference interfaces |
 | B | Selected a concrete application MCU — **GigaDevice GD32W515 (Cortex-M33)** on the GD32W51x SDK — see [doc 12](12-gigadevice-gd32w515-platform.md); added the GD32W515 HAL port and a callout in [doc 09](09-hardware-platform.md) |
+| C | Added the **GD32W515 peripheral & pin map** ([doc 13](13-gd32w515-peripheral-map.md)) and the **TF-M secure-partition layout** ([doc 14](14-tfm-secure-partition-layout.md)) mapped to global grid cybersecurity standards (IEC 62443/62351, NIST IR 7628, IEEE 1686, ETSI EN 303 645, PSA Certified, EU CRA/RED, UK SMETS2); added the compile-checked secure NSC API and a TF-M partition manifest example |
 
 ---
 
@@ -44,6 +45,8 @@ already vendored here — `coreMQTT`, `coreHTTP`, `coreJSON`, `corePKCS11`,
 | 10 | [Interoperability & Standards](10-interoperability-and-standards.md) | DLMS/COSEM, ISO 15118, OCPP, IEEE 2030.5, OpenADR — what the meter terminates vs interworks |
 | 11 | [Testing, Validation & Certification](11-testing-validation-certification.md) | Test pyramid on this repo's harness, EV-era test cases, certification gates |
 | 12 | [GD32W515 Platform (Rev B)](12-gigadevice-gd32w515-platform.md) | Concrete MCU selection: GigaDevice GD32W515 Cortex-M33 + GD32W51x SDK, TrustZone, Wi-Fi, HAL port |
+| 13 | [GD32W515 Peripheral & Pin Map](13-gd32w515-peripheral-map.md) | Per-peripheral allocation for the meter board and each pin's security domain |
+| 14 | [TF-M Secure-Partition Layout](14-tfm-secure-partition-layout.md) | Secure/non-secure partitioning, NSC API, and mapping to global grid cybersecurity standards |
 
 Diagrams are authored in [Mermaid](https://mermaid.js.org/) and render directly
 on GitHub. Reusable config snippets live in [`config-examples/`](config-examples/),

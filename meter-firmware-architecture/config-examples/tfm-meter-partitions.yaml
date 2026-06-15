@@ -1,0 +1,71 @@
+# TF-M Application-RoT partition manifest (example) for the smart meter.
+#
+# Illustrative, TF-M-manifest-style declaration of the meter-specific secure
+# partitions described in 14-tfm-secure-partition-layout.md. Real TF-M manifests
+# are per-partition (psa_manifest); this single file summarizes the meter's
+# Application Root of Trust services and their non-secure-callable (NSC) entries
+# for review. Service signatures match reference-src/include/secure/meter_secure_api.h.
+
+description: "Smart meter Application Root of Trust (TF-M / PSA)"
+psa_framework_version: 1.1
+
+partitions:
+  - name: TFM_SP_METERING_TRUST
+    type: APPLICATION-ROT
+    priority: NORMAL
+    model: IPC
+    entry_point: tfm_metering_trust_main
+    stack_size: 0x0800
+    # Verifies the sealed metrology AFE reading and signs revenue records.
+    services:
+      - name: METER_SIGN_REVENUE
+        sid: 0x00000101            # NSC: meter_secure_sign_revenue()
+        non_secure_clients: true
+        connection_based: false
+    # Uses PSA Crypto + Protected Storage (register integrity root).
+    dependencies:
+      - TFM_CRYPTO
+      - TFM_PROTECTED_STORAGE
+
+  - name: TFM_SP_ACTUATOR_GUARD
+    type: APPLICATION-ROT
+    priority: HIGH                 # control-path safety
+    model: IPC
+    entry_point: tfm_actuator_guard_main
+    stack_size: 0x0800
+    # Enforces relay / load-limit / DR-V2G policy, interlocks, and rate-limit.
+    services:
+      - name: METER_ACTUATE
+        sid: 0x00000102            # NSC: meter_secure_actuate()
+        non_secure_clients: true
+        connection_based: false
+    # Owns the secure-attributed relay/load-limit GPIO (see doc 13 section 3).
+    mmio_regions:
+      - name: TFM_PERIPHERAL_RELAY_GPIO
+        permission: READ-WRITE
+    dependencies:
+      - TFM_CRYPTO                 # verify Job signature / envelope proof
+
+  - name: TFM_SP_TAMPER_MONITOR
+    type: APPLICATION-ROT
+    priority: HIGH
+    model: IPC
+    entry_point: tfm_tamper_monitor_main
+    stack_size: 0x0400
+    # Latches and signs tamper events; NSPE may read, never clear.
+    services:
+      - name: METER_GET_TAMPER
+        sid: 0x00000103            # NSC: meter_secure_get_tamper()
+        non_secure_clients: true
+        connection_based: false
+    mmio_regions:
+      - name: TFM_PERIPHERAL_TAMPER_GPIO
+        permission: READ-ONLY
+      - name: TFM_PERIPHERAL_RTC_TAMP
+        permission: READ-ONLY
+    dependencies:
+      - TFM_PROTECTED_STORAGE      # signed tamper log
+
+# PSA Root-of-Trust services consumed (provided by TF-M platform):
+#   TFM_CRYPTO, TFM_INTERNAL_TRUSTED_STORAGE, TFM_PROTECTED_STORAGE,
+#   TFM_INITIAL_ATTESTATION (NSC: meter_secure_get_attestation), TFM_FWU.
