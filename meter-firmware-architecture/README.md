@@ -33,6 +33,7 @@ already vendored here — `coreMQTT`, `coreHTTP`, `coreJSON`, `corePKCS11`,
 | 06 | [Security Architecture](06-security-architecture.md) | Secure boot, identity, PKCS#11, TLS, Defender, key lifecycle |
 | 07 | [OTA & Device Lifecycle](07-ota-and-lifecycle.md) | Provisioning, fleet rollout, A/B OTA, decommissioning |
 | 08 | [Data Model & Device Shadow](08-data-model-shadow.md) | Telemetry schema, shadow documents, configuration contract |
+| 09 | [Hardware Platform & HAL](09-hardware-platform.md) | MCU selection for the EV-saturated grid, HAL references, IR/optical port, billing channel |
 
 Diagrams are authored in [Mermaid](https://mermaid.js.org/) and render directly
 on GitHub. Reusable config snippets live in [`config-examples/`](config-examples/).
