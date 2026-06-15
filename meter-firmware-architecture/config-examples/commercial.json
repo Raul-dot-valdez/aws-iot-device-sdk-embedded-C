@@ -1,0 +1,28 @@
+{
+  "variant": "commercial",
+  "gridProfile": "us-ca-pge",
+  "evReady": true,
+  "reporting": {
+    "interval_s": 300,
+    "pq_stream": true
+  },
+  "tariff": {
+    "plan": "B-19",
+    "schedule_ref": "tou-demand-2026h2",
+    "demand_charge": true
+  },
+  "dr": {
+    "enrolled": true,
+    "programs": ["capacity-dr", "fleet-depot-v2g"]
+  },
+  "features": {
+    "demand_register": true,
+    "four_quadrant": true,
+    "load_limit": true,
+    "v2g_authorization": true
+  },
+  "metrology": {
+    "phases": "three",
+    "ct_ratio": 200
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "variant": "residential",
+  "gridProfile": "us-ca-pge",
+  "evReady": true,
+  "reporting": {
+    "interval_s": 900,
+    "pq_stream": false
+  },
+  "tariff": {
+    "plan": "EV2A",
+    "schedule_ref": "tou-2026h2",
+    "demand_charge": false
+  },
+  "dr": {
+    "enrolled": true,
+    "programs": ["feeder-peak", "v2g-pilot"]
+  },
+  "features": {
+    "demand_register": false,
+    "four_quadrant": true,
+    "load_limit": false,
+    "v2g_authorization": true
+  },
+  "metrology": {
+    "phases": "split",
+    "ct_ratio": 1
+  }
+}
