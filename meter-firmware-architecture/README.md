@@ -34,6 +34,8 @@ already vendored here — `coreMQTT`, `coreHTTP`, `coreJSON`, `corePKCS11`,
 | 07 | [OTA & Device Lifecycle](07-ota-and-lifecycle.md) | Provisioning, fleet rollout, A/B OTA, decommissioning |
 | 08 | [Data Model & Device Shadow](08-data-model-shadow.md) | Telemetry schema, shadow documents, configuration contract |
 | 09 | [Hardware Platform & HAL](09-hardware-platform.md) | MCU selection for the EV-saturated grid, HAL references, IR/optical port, billing channel |
+| 10 | [Interoperability & Standards](10-interoperability-and-standards.md) | DLMS/COSEM, ISO 15118, OCPP, IEEE 2030.5, OpenADR — what the meter terminates vs interworks |
+| 11 | [Testing, Validation & Certification](11-testing-validation-certification.md) | Test pyramid on this repo's harness, EV-era test cases, certification gates |
 
 Diagrams are authored in [Mermaid](https://mermaid.js.org/) and render directly
 on GitHub. Reusable config snippets live in [`config-examples/`](config-examples/).
