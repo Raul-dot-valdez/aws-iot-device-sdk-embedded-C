@@ -1,0 +1,20 @@
+# Secrets — never commit real WiFi passwords or WireGuard private keys.
+src/secrets.h
+secrets.h
+*.key
+docs/server-setup/*.key
+
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Arduino IDE build output
+build/
+*.hex
+*.bin
+*.elf
+
+# Editor / OS cruft
+.vscode/
+.DS_Store
