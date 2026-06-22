@@ -1,9 +1,13 @@
 name: CI Checks
 
 on:
+  # The legacy AWS IoT SDK suite carries pre-existing toolchain rot (removed
+  # ubuntu-18.04 runner, the unavailable CMake 3.2.0 download, etc.). Scope it to
+  # main and manual dispatch so it never runs on — and never nags — unrelated
+  # feature-branch PRs such as the arduino-r4-vpn-gateway project, which has its
+  # own focused CI in arduino-r4-vpn-gateway.yml. Re-add `pull_request` here if
+  # you later modernize the SDK build and want PR coverage back.
   push:
-    branches: ["**"]
-  pull_request:
     branches: [main]
   workflow_dispatch:
 
