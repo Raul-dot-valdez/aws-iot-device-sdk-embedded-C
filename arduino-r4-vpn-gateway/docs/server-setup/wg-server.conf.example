@@ -1,0 +1,30 @@
+# Example WireGuard SERVER config (place at /etc/wireguard/wg0.conf on a Linux
+# box or VPS that is reachable from the internet).  This is the peer your
+# Arduino gateway dials into.
+#
+# Generate the server keys first:
+#   wg genkey | tee server_private.key | wg pubkey > server_public.key
+#
+# Replace the placeholders below, then:
+#   sudo wg-quick up wg0
+#   sudo systemctl enable wg-quick@wg0
+
+[Interface]
+# The server's address inside the tunnel subnet (10.6.0.0/24 here).
+Address    = 10.6.0.1/24
+ListenPort = 51820
+PrivateKey = <SERVER_PRIVATE_KEY>
+
+# NAT tunnel traffic out to the internet / LAN. Replace eth0 with the server's
+# real uplink interface (run `ip route` to find it).
+PostUp   = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+
+# --- The Arduino gateway, as seen by the server -----------------------------
+[Peer]
+# PublicKey is the board's PUBLIC key (the pubkey of WG_PRIVATE_KEY in config.h)
+PublicKey  = <ARDUINO_PUBLIC_KEY>
+# The single tunnel IP the board is allowed to use (matches WG_LOCAL_IP).
+AllowedIPs = 10.6.0.2/32
+# Optional pre-shared key; must match WG_PRESHARED_KEY in config.h if used.
+# PresharedKey = <PRESHARED_KEY>
