@@ -9,17 +9,19 @@ on:
 
 jobs:
   build-check-demos:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-18.04
     steps:
       - name: Clone This Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v2
         with:
           submodules: recursive
       - name: Configure CMake build
         run: |
           sudo apt-get install -y libmosquitto-dev
+          curl https://cmake.org/files/v3.2/cmake-3.2.0-Linux-x86_64.tar.gz -o cmake.tar.gz
+          tar -xf cmake.tar.gz
           mkdir build && cd build
-          cmake .. \
+          ../cmake-3.2.0-Linux-x86_64/bin/cmake .. \
           -G "Unix Makefiles" \
           -DBUILD_DEMOS=1 \
           -DCMAKE_BUILD_TYPE=Release \
@@ -46,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Clone This Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v2
         with:
           submodules: recursive
       - name: Rename source files
@@ -61,8 +63,10 @@ jobs:
       - name: Configure CMake build
         run: |
           sudo apt-get install -y libmosquitto-dev
+          curl https://cmake.org/files/v3.2/cmake-3.2.0-Linux-x86_64.tar.gz -o cmake.tar.gz
+          tar -xf cmake.tar.gz
           mkdir build && cd build
-          cmake .. \
+          ../cmake-3.2.0-Linux-x86_64/bin/cmake .. \
           -G "Unix Makefiles" \
           -DBUILD_DEMOS=1 \
           -DCMAKE_BUILD_TYPE=Release \
@@ -85,16 +89,18 @@ jobs:
         run: |
           make -C build/ help | grep demo | tr -d '. ' | xargs make -C build/
   build-check-system-tests:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-18.04
     steps:
       - name: Clone This Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v2
         with:
           submodules: recursive
       - name: Configure CMake build
         run: |
+          curl https://cmake.org/files/v3.2/cmake-3.2.0-Linux-x86_64.tar.gz -o cmake.tar.gz
+          tar -xf cmake.tar.gz
           mkdir build && cd build
-          cmake .. \
+          ../cmake-3.2.0-Linux-x86_64/bin/cmake .. \
           -G "Unix Makefiles" \
           -DCMAKE_BUILD_TYPE=Release \
           -DBUILD_TESTS=1 \
@@ -116,16 +122,18 @@ jobs:
       - name: Build System Tests
         run: make -C build/ help | grep system | tr -d '. ' | xargs make -C build/
   build-check-install:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-18.04
     steps:
       - name: Clone This Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v2
         with:
           submodules: recursive
       - name: Configure CMake for installation of shared libraries at custom location
         run: |
+          curl https://cmake.org/files/v3.2/cmake-3.2.0-Linux-x86_64.tar.gz -o cmake.tar.gz
+          tar -xf cmake.tar.gz
           mkdir build && cd build
-          cmake .. \
+          ../cmake-3.2.0-Linux-x86_64/bin/cmake .. \
           -DBUILD_DEMOS=0 -DBUILD_TESTS=0 \
           -DCSDK_HEADER_INSTALL_PATH="$PWD/../shared-libs-headers-install-dir" -DCSDK_LIB_INSTALL_PATH="$PWD/../shared-libs-install-dir"
       - name: Install shared libraries and verify custom install location
@@ -144,7 +152,7 @@ jobs:
       - name: Configure CMake for installation of static libraries at custom location
         run: |
           cd build
-          cmake .. \
+          ../cmake-3.2.0-Linux-x86_64/bin/cmake .. \
           -DBUILD_SHARED_LIBRARIES=OFF \
           -DBUILD_DEMOS=0 -DBUILD_TESTS=0 \
           -DCSDK_HEADER_INSTALL_PATH="$PWD/../static-libs-headers-install-dir" -DCSDK_LIB_INSTALL_PATH="$PWD/../static-libs-install-dir"
@@ -164,7 +172,7 @@ jobs:
       - name: Configure CMake build for system install location and selective installation
         run: |
           cd build
-          cmake .. \
+          ../cmake-3.2.0-Linux-x86_64/bin/cmake .. \
           -DBUILD_DEMOS=0 -DBUILD_TESTS=0 -DINSTALL_TO_SYSTEM=1 \
           -DINSTALL_LIBS="SHADOW;DEFENDER" -DINSTALL_PLATFORM_ABSTRACTIONS=0
       - name: Install selected libraries and verify default system installation path is used
@@ -188,16 +196,18 @@ jobs:
           # Each line of install_manifest.txt contains the location of an installed library or header
           done <install_manifest.txt
   unittest:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-18.04
     steps:
       - name: Clone This Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v2
         with:
           submodules: recursive
-      - name: Configure CMake build
+      - name: Download CMake 3.2.0
         run: |
+          curl https://cmake.org/files/v3.2/cmake-3.2.0-Linux-x86_64.tar.gz -o cmake.tar.gz
+          tar -xf cmake.tar.gz
           mkdir build
-          cmake . -Bbuild/ \
+          cmake-3.2.0-Linux-x86_64/bin/cmake . -Bbuild/ \
           -G "Unix Makefiles" \
           -DBUILD_TESTS=1 \
           -DCMAKE_BUILD_TYPE=Debug \
@@ -238,9 +248,9 @@ jobs:
           fi
           exit $RESULT
   complexity:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-18.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v2
       - name: Setup
         run: sudo apt-get install complexity
       - name: Check Complexity
@@ -248,9 +258,9 @@ jobs:
           find platform/ \( -iname '*.c' ! -wholename '*test*' \) |\
           xargs complexity --scores --threshold=0 --horrid-threshold=8
   spell-check:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-18.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v2
       - name: Install spell
         run: |
           sudo apt-get install -y spell util-linux
@@ -267,13 +277,13 @@ jobs:
             fi
           done
   formatting:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-18.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v2
       - name: Install Uncrustify
         run: sudo apt-get install uncrustify
       - name: Check Formatting With Uncrustify
-        run: find . -path ./arduino-r4-vpn-gateway -prune -o -iname "*.[hc]" -exec uncrustify --check -c tools/uncrustify.cfg {} +
+        run: find . -iname "*.[hc]" -exec uncrustify --check -c tools/uncrustify.cfg {} +
       - name: Check For Trailing Whitespace
         run: |
           set +e
@@ -297,7 +307,7 @@ jobs:
   doxygen:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v2
         with:
           submodules: recursive
       - name: Install Doxygen
@@ -305,9 +315,9 @@ jobs:
           wget -qO- "https://sourceforge.net/projects/doxygen/files/rel-1.9.2/doxygen-1.9.2.linux.bin.tar.gz/download" | sudo tar --strip-components=1 -xz -C /usr/local
           sudo apt-get install -y libclang-9-dev libclang-cpp9 graphviz
       - name: Install Python3
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v2
         with:
-          python-version: '3.11'
+          python-version: '3.7.10'
       - name: Generate doxygen output
         run: |
           if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
@@ -318,19 +328,19 @@ jobs:
           fi
       - name: Upload doxygen artifact if main branch
         if: success() && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v2
         with:
           name: doxygen.zip
           path: ./doxygen.zip
           retention-days: 2
   git-secrets:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-18.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v2
         with:
           submodules: recursive
       - name: Checkout awslabs/git-secrets
-        uses: actions/checkout@v4
+        uses: actions/checkout@v2
         with:
           repository: awslabs/git-secrets
           ref: master
@@ -342,15 +352,15 @@ jobs:
           git-secrets --register-aws
           git-secrets --scan
   link-verifier:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-18.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v2
         with:
           submodules: recursive
       - name: Setup Python for link verifier action
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v2
         with:
-          python-version: '3.11'
+          python-version: '3.7.10'
       - name: Check Links
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -363,11 +373,11 @@ jobs:
   verify-manifest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v2
         with:
           submodules: recursive
       - name: Setup Python for manifest.yml verifier action
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v2
         with:
           python-version: '3.x'
       - name: Verify manifest.yml

@@ -1,0 +1,41 @@
+name: Arduino R4 VPN Gateway
+
+# Focused CI for the arduino-r4-vpn-gateway/ project only. It compiles the
+# sketch for the real Arduino UNO R4 WiFi target, which proves the firmware
+# builds bare-metal (no RTOS) for the board. Deliberately scoped with `paths`
+# so it never runs on — and is never gated by — the unrelated AWS IoT SDK code.
+
+on:
+  push:
+    paths:
+      - 'arduino-r4-vpn-gateway/**'
+      - '.github/workflows/arduino-r4-vpn-gateway.yml'
+  pull_request:
+    paths:
+      - 'arduino-r4-vpn-gateway/**'
+      - '.github/workflows/arduino-r4-vpn-gateway.yml'
+  workflow_dispatch:
+
+jobs:
+  compile:
+    name: Compile sketch for UNO R4 WiFi
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install UNO R4 core and libraries
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install arduino:renesas_uno
+          arduino-cli lib install ArduinoGraphics
+
+      - name: Compile (simulation mode — bare-metal, no RTOS)
+        run: |
+          arduino-cli compile \
+            --fqbn arduino:renesas_uno:unor4wifi \
+            --warnings all \
+            arduino-r4-vpn-gateway
