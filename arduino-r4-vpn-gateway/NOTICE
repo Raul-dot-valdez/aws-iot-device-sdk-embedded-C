@@ -1,0 +1,27 @@
+Arduino UNO R4 WiFi — VPN Gateway
+Copyright (c) 2026 Raul Valdez. Licensed under the MIT License (see LICENSE).
+
+This project integrates with and/or is written against the following
+third-party open-source components, each distributed under its own license.
+They are NOT vendored in this repository; install them via the Arduino/
+PlatformIO library managers or from their upstream sources.
+
+- WireGuard protocol and reference design
+  https://www.wireguard.com/  — "WireGuard" is a registered trademark of
+  Jason A. Donenfeld.
+
+- WireGuard-ESP32-Arduino (Kenta Ida / ciniml)
+  https://github.com/ciniml/WireGuard-ESP32-Arduino  (BSD-style; see upstream)
+  The live tunnel path is written against this library's `WireGuard` class API.
+
+- Arduino_LED_Matrix and WiFiS3 (Arduino Renesas core)
+  https://github.com/arduino/ArduinoCore-renesas  (LGPL-2.1 / per-file)
+
+- ArduinoGraphics
+  https://github.com/arduino-libraries/ArduinoGraphics  (LGPL-2.1)
+
+- wireguard-tools (wg / wg-quick), used on the server side
+  https://git.zx2c4.com/wireguard-tools/  (GPL-2.0)
+
+Trademarks are the property of their respective owners. Use of a name does not
+imply endorsement.
