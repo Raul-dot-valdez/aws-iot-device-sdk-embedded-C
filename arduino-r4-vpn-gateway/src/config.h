@@ -149,4 +149,29 @@
 /* How long (ms) to wait after losing WiFi before retrying the whole chain. */
 #define WIFI_RETRY_BACKOFF_MS   5000
 
+/* =========================================================================
+ * 7. THREAT TRIPWIRE (anomaly detection on the status server)
+ * =========================================================================
+ * Lightweight, decaying-score heuristics that notice automated probing of the
+ * status web server and raise a threat level shown on the LED matrix and the
+ * status JSON. Tune the sensitivity here; 0/disable to turn it off.
+ * ------------------------------------------------------------------------- */
+#define THREAT_DETECTION_ENABLED 1
+
+/* Auth failures (e.g. wrong/missing STATUS_SERVER_TOKEN) within the decay
+ * window needed to raise ALERT. */
+#define THREAT_AUTH_FAIL_ALERT   5
+
+/* Malformed/oversized requests within the window needed to raise ALERT. */
+#define THREAT_MALFORMED_ALERT   8
+
+/* Request-rate score needed to raise the milder ELEVATED level. */
+#define THREAT_REQ_RATE_ELEVATED 40
+
+/* Every this many ms, each score decays by 1 (this is the natural cooldown). */
+#define THREAT_DECAY_MS          2000
+
+/* Clamp so a flood can't overflow the counters. */
+#define THREAT_SCORE_MAX         60
+
 #endif /* VPN_GATEWAY_CONFIG_H */

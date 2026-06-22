@@ -70,6 +70,8 @@ That's it. It reconnects on its own if WiFi or power blips.
 | Padlock blinking | connected but quiet |
 | WiFi symbol with a slash | lost WiFi, retrying |
 | Big X | something's wrong — check your settings |
+| Blinking corners | "elevated" — unusual activity on the status page |
+| Flashing exclamation **!** | "alert" — the box thinks it's being probed |
 
 ## Changing settings later — no code, just `config.h`
 
@@ -91,6 +93,7 @@ program logic. The common ones:
 | `LED_FPS` | how smooth the animations are |
 | `WIFI_CONNECT_TIMEOUT_MS` | how long to wait for WiFi before retrying |
 | `WIFI_RETRY_BACKOFF_MS` | how long to pause before reconnecting |
+| `THREAT_DETECTION_ENABLED` | the "being probed" tripwire on/off, and its sensitivity |
 | `VPN_SIMULATION` | demo mode on/off (no server needed when on) |
 
 Because every knob is a setting and not a code change, upgrading to a new

@@ -21,10 +21,12 @@
 #include "src/VpnGateway.h"
 #include "src/LedDashboard.h"
 #include "src/StatusServer.h"
+#include "src/ThreatMonitor.h"
 
-VpnGateway   gateway;
-LedDashboard dashboard;
-StatusServer status;
+VpnGateway    gateway;
+LedDashboard  dashboard;
+StatusServer  status;
+ThreatMonitor threat;
 
 void setup() {
   Serial.begin(115200);
@@ -53,12 +55,13 @@ void setup() {
 
 void loop() {
   gateway.update();
+  threat.update();
 
 #if LED_DASHBOARD_ENABLED
-  dashboard.update(gateway.state(), gateway.metrics());
+  dashboard.update(gateway.state(), gateway.metrics(), threat.level());
 #endif
 
-  status.handleClient(gateway);
+  status.handleClient(gateway, threat);
 
   // Log state transitions and a periodic heartbeat to the serial monitor.
   static VpnState lastState = VpnState::Boot;
@@ -71,6 +74,14 @@ void loop() {
       Serial.print(F("  LAN http://"));
       Serial.println(gateway.lanIp());
     }
+  }
+
+  // Log threat-level transitions from the anomaly tripwire.
+  static ThreatLevel lastThreat = ThreatLevel::Normal;
+  if (threat.level() != lastThreat) {
+    lastThreat = threat.level();
+    Serial.print(F("[threat] -> "));
+    Serial.println(threatLevelName(threat.level()));
   }
   if (millis() - lastLog > 5000) {
     lastLog = millis();

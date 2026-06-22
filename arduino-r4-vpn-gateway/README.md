@@ -201,11 +201,25 @@ uptime, last-handshake age). Machine-readable JSON is at
 `curl` in a cron job.
 
 ```json
-{ "state":"online", "lan_ip":"192.168.1.50", "tunnel_ip":"10.6.0.2",
+{ "threat":"normal", "auth_failures":0, "malformed_requests":0,
+  "state":"online", "lan_ip":"192.168.1.50", "tunnel_ip":"10.6.0.2",
   "rssi_dbm":-58, "handshakes":3, "last_handshake_ms":21000,
   "tx_bytes":148213, "rx_bytes":402991, "tx_rate_bps":900,
   "rx_rate_bps":1640, "uptime_ms":372000 }
 ```
+
+### Anomaly tripwire — "the box notices it's being probed"
+
+A lightweight, config-driven monitor watches the only surface this device
+exposes (the status server) for the *shape* of automated probing — repeated
+auth failures, malformed/oversized requests, request-rate spikes — using
+decaying-score heuristics (honest: heuristics, not ML on 32 KB of RAM). It
+raises a `threat` level (`normal` / `elevated` / `alert`) that shows up in the
+JSON, on the web page, and on the LED matrix: **Elevated** blinks the four
+corners; **Alert** flashes a bold exclamation mark. Scores decay on their own,
+so the level clears once probing stops. In simulation mode it periodically
+self-trips so you can see it work on a bare board. Tune it in `config.h`
+(section 7).
 
 ---
 

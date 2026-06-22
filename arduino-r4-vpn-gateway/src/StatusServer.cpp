@@ -15,9 +15,12 @@ void StatusServer::begin() {
 #endif
 }
 
-void StatusServer::sendJson(Stream& out, const VpnGateway& gw) {
+void StatusServer::sendJson(Stream& out, const VpnGateway& gw, const ThreatMonitor& threat) {
   VpnMetrics m = gw.metrics();
   out.print("{");
+  out.print("\"threat\":\"");       out.print(threatLevelName(threat.level())); out.print("\",");
+  out.print("\"auth_failures\":");  out.print(threat.totalAuthFailures());      out.print(",");
+  out.print("\"malformed_requests\":"); out.print(threat.totalMalformed());     out.print(",");
   out.print("\"state\":\"");        out.print(vpnStateName(gw.state())); out.print("\",");
   out.print("\"lan_ip\":\"");       out.print(gw.lanIp());               out.print("\",");
   out.print("\"tunnel_ip\":\"");    out.print(gw.localTunnelIp());       out.print("\",");
@@ -58,9 +61,12 @@ void StatusServer::sendHtml(Stream& out) {
     "<div><div class=k>Total RX / TX</div><div class=v id=tot>-</div></div>"
     "<div><div class=k>Tunnel uptime</div><div class=v id=up>-</div></div>"
     "<div><div class=k>Last handshake</div><div class=v id=lh>-</div></div>"
+    "<div><div class=k>Threat</div><div class=v id=threat>-</div></div>"
+    "<div><div class=k>Auth fails / malformed</div><div class=v id=probe>-</div></div>"
     "</div></div><script>"
     "const C={online:'#3fb950',handshaking:'#d29922','wifi-connecting':'#d29922',"
     "stalled:'#d29922','wifi-lost':'#f85149',error:'#f85149',boot:'#8b97a7'};"
+    "const T={normal:'#3fb950',elevated:'#d29922',alert:'#f85149'};"
     "function hb(b){if(b<1024)return b+' B';if(b<1048576)return (b/1024).toFixed(1)+' KB';"
     "return (b/1048576).toFixed(2)+' MB';}"
     "function hr(b){return hb(b)+'/s';}"
@@ -78,16 +84,20 @@ void StatusServer::sendHtml(Stream& out) {
     "document.getElementById('tot').textContent=hb(d.rx_bytes)+'  /  '+hb(d.tx_bytes);"
     "document.getElementById('up').textContent=ms(d.uptime_ms);"
     "document.getElementById('lh').textContent=d.state=='online'?ms(d.last_handshake_ms)+' ago':'-';"
+    "let th=document.getElementById('threat');th.textContent=d.threat;"
+    "th.style.color=T[d.threat]||'#e6edf3';"
+    "document.getElementById('probe').textContent=d.auth_failures+' / '+d.malformed_requests;"
     "}catch(e){document.getElementById('state').textContent='unreachable';}}"
     "tick();setInterval(tick,1000);"
     "</script></body></html>"));
 }
 
-void StatusServer::handleClient(const VpnGateway& gw) {
+void StatusServer::handleClient(const VpnGateway& gw, ThreatMonitor& threat) {
 #if STATUS_HAVE_WIFI && STATUS_SERVER_ENABLED
   if (!started_) return;
   WiFiClient client = server_.available();
   if (!client) return;
+  threat.report(ThreatMonitor::Event::Request);
 
   // Parse the request line and capture the Authorization header (if any).
   // Bounded by a 1s deadline, a 256-byte line cap, and a header count cap so a
@@ -112,14 +122,19 @@ void StatusServer::handleClient(const VpnGateway& gw) {
         authHeader = line;
       }
       line = "";
-      if (++headerCount > 40) break;  // cap header count
+      if (++headerCount > 40) { threat.report(ThreatMonitor::Event::Malformed); break; }
     } else if (c != '\r') {
       if (line.length() < 256) line += c;  // cap line length
+      else threat.report(ThreatMonitor::Event::Malformed);  // oversized line
     }
   }
 
+  // A request line that isn't a recognizable HTTP request is a probe signal.
+  if (reqLine.indexOf("HTTP/") < 0) threat.report(ThreatMonitor::Event::Malformed);
+
   // Optional token gate (see STATUS_SERVER_TOKEN). Fail closed on mismatch.
   if (strlen(STATUS_SERVER_TOKEN) > 0 && !requestAuthorized(reqLine, authHeader)) {
+    threat.report(ThreatMonitor::Event::AuthFailure);
     client.print(F("HTTP/1.1 401 Unauthorized\r\n"
                    "WWW-Authenticate: Bearer\r\n"
                    "Content-Type: text/plain; charset=utf-8\r\n"
@@ -149,7 +164,7 @@ void StatusServer::handleClient(const VpnGateway& gw) {
     client.print(F("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"));
     client.print(kSecurityHeaders);
     client.print(F("Connection: close\r\n\r\n"));
-    sendJson(client, gw);
+    sendJson(client, gw, threat);
   } else {
     client.print(F("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"));
     client.print(kSecurityHeaders);
@@ -161,6 +176,7 @@ void StatusServer::handleClient(const VpnGateway& gw) {
   client.stop();
 #else
   (void)gw;
+  (void)threat;
 #endif
 }
 

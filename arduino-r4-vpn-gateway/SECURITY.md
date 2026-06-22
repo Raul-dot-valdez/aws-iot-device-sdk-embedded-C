@@ -69,6 +69,15 @@ keys are still placeholders, so a misconfigured device never runs "open."
 - Request parsing is bounded (1 s deadline, 256-byte line cap, 40-header cap,
   fixed buffers) so a slow or malformed client can't tie up the single loop.
 
+**Anomaly tripwire.** A small, O(1) monitor (`ThreatMonitor`) watches the status
+server for the *shape* of automated probing — repeated auth failures, malformed/
+oversized requests, request-rate spikes — using decaying-score heuristics (not
+ML; it's honest about the 32 KB RAM). It raises a `threat` level surfaced in the
+status JSON, on the web page, and on the LED matrix (Elevated = blinking
+corners, Alert = flashing exclamation), and the scores decay so it self-clears.
+It is detection/visibility, not prevention — the bounded parser and fail-closed
+auth are what actually stop abuse. Tune thresholds in `config.h` (section 7).
+
 **Supply chain.** The project's CI workflow runs with least-privilege
 permissions (`contents: read`), pins the `actions/checkout` action to a commit
 SHA, disables credential persistence, and runs a **secret-scan** job. The scan

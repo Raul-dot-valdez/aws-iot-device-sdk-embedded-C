@@ -19,6 +19,7 @@
 
 #include <Arduino.h>
 #include "VpnGateway.h"
+#include "ThreatMonitor.h"
 
 #define LED_W 12
 #define LED_H 8
@@ -33,8 +34,10 @@ class LedDashboard {
    * so you get a friendly hello before the state machine takes the display. */
   void showBanner();
 
-  /* Non-blocking frame pump.  Pass the current state + metrics each call. */
-  void update(VpnState state, const VpnMetrics& m);
+  /* Non-blocking frame pump. Pass the current state + metrics each call. When
+   * the threat tripwire is Elevated/Alert, a warning is overlaid on the frame. */
+  void update(VpnState state, const VpnMetrics& m,
+              ThreatLevel threat = ThreatLevel::Normal);
 
  private:
   void clear();
@@ -47,6 +50,7 @@ class LedDashboard {
   void drawPadlock(int ox, int oy);
   void drawWifiLost(uint32_t t);
   void drawX();
+  void drawExclamation();
 
   uint8_t  frame_[LED_H][LED_W];
   uint32_t lastFrameMs_;

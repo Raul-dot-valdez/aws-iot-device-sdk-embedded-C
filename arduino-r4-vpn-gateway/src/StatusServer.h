@@ -14,6 +14,7 @@
 
 #include <Arduino.h>
 #include "VpnGateway.h"
+#include "ThreatMonitor.h"
 
 #if __has_include(<WiFiS3.h>)
   #include <WiFiS3.h>
@@ -29,7 +30,7 @@ class StatusServer {
  public:
   StatusServer();
   void begin();
-  void handleClient(const VpnGateway& gw);
+  void handleClient(const VpnGateway& gw, ThreatMonitor& threat);
 
  private:
 #if STATUS_HAVE_WIFI
@@ -37,7 +38,7 @@ class StatusServer {
 #endif
   bool started_;
 
-  void sendJson(Stream& out, const VpnGateway& gw);
+  void sendJson(Stream& out, const VpnGateway& gw, const ThreatMonitor& threat);
   void sendHtml(Stream& out);
 
   /* Returns true if the request may proceed. When STATUS_SERVER_TOKEN is empty

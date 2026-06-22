@@ -160,7 +160,19 @@ void LedDashboard::drawX() {
   }
 }
 
-void LedDashboard::update(VpnState state, const VpnMetrics& m) {
+/* A bold exclamation mark, used for the threat ALERT overlay. */
+void LedDashboard::drawExclamation() {
+  int cx = LED_W / 2;             // columns cx-1, cx
+  for (int y = 0; y <= 4; y++) {  // the stem
+    set(cx - 1, y, true);
+    set(cx, y, true);
+  }
+  // gap at y=5, dot at y=6
+  set(cx - 1, 6, true);
+  set(cx, 6, true);
+}
+
+void LedDashboard::update(VpnState state, const VpnMetrics& m, ThreatLevel threat) {
   uint32_t now = millis();
   if (now - lastFrameMs_ < (1000 / LED_FPS)) return;   // frame-rate cap (LED_FPS)
   lastFrameMs_ = now;
@@ -178,5 +190,17 @@ void LedDashboard::update(VpnState state, const VpnMetrics& m) {
     case VpnState::WifiLost:       drawWifiLost(now);   break;
     case VpnState::Error:          drawX();             break;
   }
+
+  // Threat tripwire overlay (drawn on top of the state frame).
+  if (threat == ThreatLevel::Alert) {
+    // Unmissable: alternate the state view with a blinking exclamation mark.
+    if ((now / 350) % 2) { clear(); drawExclamation(); }
+  } else if (threat == ThreatLevel::Elevated) {
+    // Subtle: blink the four corners without obscuring the main display.
+    bool on = (now / 500) % 2;
+    set(0, 0, on); set(LED_W - 1, 0, on);
+    set(0, LED_H - 1, on); set(LED_W - 1, LED_H - 1, on);
+  }
+
   flush();
 }
