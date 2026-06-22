@@ -78,6 +78,7 @@ arduino-r4-vpn-gateway/
 └── docs/
     ├── USAGE.md                  # ← plain-language guide for a normal user
     ├── ARCHITECTURE.md           # how the pieces fit
+    ├── HARDWARE-SECURITY.md      # RA4M1 hardware-hardening charter & roadmap
     ├── WIRING.md                 # (spoiler: there's no wiring)
     └── server-setup/             # WireGuard server config + hardening scripts
 ```

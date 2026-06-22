@@ -22,6 +22,29 @@ packets.
 
 This is a **single-peer gateway endpoint**, not a multi-tenant VPN concentrator.
 
+### Scope: the network layer vs. browser tracking
+
+A VPN tunnel is a **network-layer** protection. It is easy to over-estimate
+what it covers, so to be explicit:
+
+| The tunnel **does** | The tunnel **does NOT** |
+|---|---|
+| hide your IP / rough location from sites you visit | stop cookies, tracking pixels, or "supercookies" |
+| stop your ISP / local WiFi from seeing destination sites | stop **browser fingerprinting** (screen, fonts, GPU, timezone) |
+| encrypt traffic so a local sniffer/MITM can't read it | stop tracking once you **log in** to a platform |
+| authenticate both ends by public key | protect against a compromised website (e.g. a payment-page skimmer) |
+
+Cookies and especially fingerprinting identify the **browser/account**, not the
+IP address, so they follow you straight through any VPN. Defending against them
+is a **browser-side** job: tracker/ad blocking (e.g. uBlock Origin), blocking
+third-party cookies, per-site containers, anti-fingerprinting modes, and
+DNS-level blocking (Pi-hole / NextDNS). Use the tunnel for the network layer and
+those tools for the tracking layer — they are complementary, not substitutes.
+
+For the ambition of making this the cheapest *trustworthy* VPN box on the
+Renesas RA4M1, see the hardware-security charter in
+[`docs/HARDWARE-SECURITY.md`](docs/HARDWARE-SECURITY.md).
+
 ## What's hardened out of the box
 
 **Secrets stay out of git.** `config.h` ships only placeholders. Real secrets
