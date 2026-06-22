@@ -48,8 +48,14 @@ keys are still placeholders, so a misconfigured device never runs "open."
 
 **Supply chain.** The project's CI workflow runs with least-privilege
 permissions (`contents: read`), pins the `actions/checkout` action to a commit
-SHA, disables credential persistence, and includes a secret-scan step. See
-`.github/workflows/arduino-r4-vpn-gateway.yml`.
+SHA, disables credential persistence, and runs a **secret-scan** job. The scan
+fails the build if it finds: a committed `secrets.h`, a missing key placeholder
+in `config.h` (i.e. a real key pasted in), a tracked `*.key`, a private-key PEM
+block, or anything matching a **known credential format** — AWS access keys,
+GitHub tokens (classic and fine-grained), Stripe live keys, Slack tokens, or
+Google API keys. See `.github/workflows/arduino-r4-vpn-gateway.yml`. If a real
+secret is ever flagged, **rotate it immediately** — scrubbing git history is not
+enough once it has been pushed.
 
 ## Secure deployment checklist
 

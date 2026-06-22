@@ -53,6 +53,18 @@ jobs:
             echo "::error::Tracked *.key file(s) found."
             fail=1
           fi
+          # Common provider credential formats accidentally pasted into any file.
+          #   AWS access key id, GitHub PAT (classic + fine-grained), Stripe live
+          #   secret/restricted keys, Slack tokens, Google API keys, generic
+          #   private-key PEM headers.
+          PATTERNS='AKIA[0-9A-Z]{16}'
+          PATTERNS="$PATTERNS|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20}"
+          PATTERNS="$PATTERNS|sk_live_[A-Za-z0-9]{16}|rk_live_[A-Za-z0-9]{16}"
+          PATTERNS="$PATTERNS|xox[baprs]-[A-Za-z0-9-]{10}|AIza[0-9A-Za-z_-]{35}"
+          if grep -rInE -- "$PATTERNS" .; then
+            echo "::error::A value matching a known credential format was found above. Rotate it and move it to a git-ignored secrets file."
+            fail=1
+          fi
           if [ "$fail" -eq 0 ]; then echo "OK: no committed secrets detected."; fi
           exit $fail
 
