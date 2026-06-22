@@ -81,11 +81,49 @@ arduino-r4-vpn-gateway/
 
 ---
 
+## Opening this in the Arduino IDE (on your laptop)
+
+This project is laid out the way the Arduino IDE expects, so there's no special
+setup — the sketch folder name matches the `.ino`, and the helper code lives in
+the IDE-supported `src/` subfolder (the IDE compiles it automatically).
+
+**Easiest — open the folder directly:**
+
+1. Get the code onto your laptop: download the PR/repo as a ZIP and unzip, or
+   `git clone` it.
+2. In the Arduino IDE: **File → Open…** and pick
+   `arduino-r4-vpn-gateway/arduino-r4-vpn-gateway.ino`. The IDE opens the whole
+   sketch — you'll see tabs for `config.h`, `VpnGateway`, `LedDashboard`, and
+   `StatusServer`.
+3. **Tools → Board → Boards Manager**, install **"Arduino UNO R4 Boards"** (the
+   `WiFiS3` and `Arduino_LED_Matrix` libraries come with it).
+4. *(Optional, for the scrolling boot banner)* **Tools → Manage Libraries**,
+   install **ArduinoGraphics**. If you skip it, the banner gracefully falls back
+   to a blink — nothing else changes.
+5. **Tools → Board → Arduino UNO R4 WiFi**, pick the **Port**, click **Upload**.
+
+**If you'd rather create a new sketch in the IDE and paste the code in:**
+
+1. **File → New Sketch**, then **File → Save As…** and name it
+   `arduino_r4_vpn_gateway` (the IDE creates a matching folder).
+2. Copy this project's `src/` folder into that new sketch folder, and replace
+   the auto-generated `.ino` body with the contents of
+   `arduino-r4-vpn-gateway.ino`. Keep the `#include "src/…"` lines as they are.
+3. Continue from step 3 above.
+
+> **Naming note:** the Arduino IDE wants the sketch's folder name and `.ino`
+> name to match (they do here). If your IDE ever objects to the `-` characters,
+> just use the underscore name `arduino_r4_vpn_gateway` for both the folder and
+> the `.ino` — nothing in the code depends on the name.
+
+---
+
 ## Quick start — simulation mode (no server needed)
 
 1. **Install the board core.** Arduino IDE → Boards Manager → *Arduino UNO R4
    Boards*. (PlatformIO users: it's in `platformio.ini`.)
-2. **Install ArduinoGraphics** (Library Manager) for the scrolling banner.
+2. *(Optional)* **Install ArduinoGraphics** (Library Manager) for the scrolling
+   banner; without it the banner falls back to a blink.
 3. **Open** `arduino-r4-vpn-gateway.ino`. Leave `#define VPN_SIMULATION` as-is
    in `src/config.h`.
 4. *(Optional)* put your real WiFi SSID/password in `config.h` so the status
