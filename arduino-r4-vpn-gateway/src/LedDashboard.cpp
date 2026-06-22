@@ -162,7 +162,7 @@ void LedDashboard::drawX() {
 
 void LedDashboard::update(VpnState state, const VpnMetrics& m) {
   uint32_t now = millis();
-  if (now - lastFrameMs_ < 33) return;   // ~30 fps cap
+  if (now - lastFrameMs_ < (1000 / LED_FPS)) return;   // frame-rate cap (LED_FPS)
   lastFrameMs_ = now;
 
   switch (state) {

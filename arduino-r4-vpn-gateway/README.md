@@ -74,10 +74,16 @@ arduino-r4-vpn-gateway/
 ├── examples/
 │   └── led_patterns_demo/        # preview every animation, no WiFi needed
 └── docs/
+    ├── USAGE.md                  # ← plain-language guide for a normal user
     ├── ARCHITECTURE.md           # how the pieces fit
     ├── WIRING.md                 # (spoiler: there's no wiring)
     └── server-setup/             # WireGuard server config + bootstrap script
 ```
+
+> **New here / not a networking person?** Start with the simple walkthrough in
+> [`docs/USAGE.md`](docs/USAGE.md). Everything you'd ever change lives in one
+> file (`src/config.h`), so day-to-day use and tweaks never require touching
+> code.
 
 ---
 

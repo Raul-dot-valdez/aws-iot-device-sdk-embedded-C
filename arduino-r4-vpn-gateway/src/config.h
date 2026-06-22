@@ -91,4 +91,22 @@
 /* Scrolling banner text shown at boot. */
 #define LED_BANNER_TEXT         " R4 VPN "
 
+/* Animation refresh rate (frames per second). Higher = smoother but busier;
+ * 30 is plenty for this panel. */
+#define LED_FPS                 30
+
+/* =========================================================================
+ * 6. TIMING & RETRY BEHAVIOUR (advanced — defaults are sensible)
+ * =========================================================================
+ * These are the knobs that used to be buried in the code. They live here so
+ * tuning the gateway never requires touching the firmware itself.
+ * ------------------------------------------------------------------------- */
+
+/* How long (ms) to wait for WiFi to associate before deciding it failed.
+ * In simulation mode the demo simply continues after this. */
+#define WIFI_CONNECT_TIMEOUT_MS 15000
+
+/* How long (ms) to wait after losing WiFi before retrying the whole chain. */
+#define WIFI_RETRY_BACKOFF_MS   5000
+
 #endif /* VPN_GATEWAY_CONFIG_H */

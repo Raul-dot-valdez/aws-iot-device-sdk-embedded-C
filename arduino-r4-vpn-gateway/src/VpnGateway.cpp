@@ -102,7 +102,7 @@ void VpnGateway::pollWifi() {
 #endif
   // Still trying.  Give WiFi a generous window before deciding it failed.
   const uint32_t elapsed = millis() - stateEnteredMs_;
-  if (elapsed > 15000) {
+  if (elapsed > WIFI_CONNECT_TIMEOUT_MS) {
 #ifdef VPN_SIMULATION
     // No usable WiFi on the bench?  Press on so the LED demo still runs.
     strncpy(lanIp_, "0.0.0.0", sizeof(lanIp_));
@@ -210,7 +210,7 @@ void VpnGateway::update() {
 
     case VpnState::WifiLost:
       // Back off a few seconds, then retry the whole chain.
-      if (millis() - stateEnteredMs_ > 5000) enter(VpnState::WifiConnecting);
+      if (millis() - stateEnteredMs_ > WIFI_RETRY_BACKOFF_MS) enter(VpnState::WifiConnecting);
       break;
 
     case VpnState::Handshaking:
