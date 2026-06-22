@@ -26,5 +26,9 @@ PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACC
 PublicKey  = <ARDUINO_PUBLIC_KEY>
 # The single tunnel IP the board is allowed to use (matches WG_LOCAL_IP).
 AllowedIPs = 10.6.0.2/32
-# Optional pre-shared key; must match WG_PRESHARED_KEY in config.h if used.
+# Optional pre-shared key (2026 hardening: adds a symmetric layer that resists
+# "harvest now, decrypt later" attacks). Generate with `wg genpsk`. If you set
+# it here you MUST also set WG_PRESHARED_KEY in secrets.h/config.h, and use a
+# WireGuard binding on the board that supports a PSK — otherwise the handshake
+# will fail. Leave it commented out to keep the simple (still-secure) setup.
 # PresharedKey = <PRESHARED_KEY>

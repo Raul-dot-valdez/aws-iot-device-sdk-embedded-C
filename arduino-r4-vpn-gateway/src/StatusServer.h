@@ -39,6 +39,11 @@ class StatusServer {
 
   void sendJson(Stream& out, const VpnGateway& gw);
   void sendHtml(Stream& out);
+
+  /* Returns true if the request may proceed. When STATUS_SERVER_TOKEN is empty
+   * this is always true; otherwise the token must appear in the Authorization
+   * header (Bearer) or as a ?token= query parameter. */
+  bool requestAuthorized(const String& reqLine, const String& authHeader);
 };
 
 #endif /* STATUS_SERVER_H */

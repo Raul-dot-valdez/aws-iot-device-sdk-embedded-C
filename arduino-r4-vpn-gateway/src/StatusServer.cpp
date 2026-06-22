@@ -89,28 +89,71 @@ void StatusServer::handleClient(const VpnGateway& gw) {
   WiFiClient client = server_.available();
   if (!client) return;
 
-  // Read the request line only; we route on the path and ignore headers.
+  // Parse the request line and capture the Authorization header (if any).
+  // Bounded by a 1s deadline, a 256-byte line cap, and a header count cap so a
+  // slow or malicious client cannot tie up the single-threaded loop.
   String reqLine;
+  String authHeader;
+  String line;
+  bool firstLine = true;
+  uint16_t headerCount = 0;
   uint32_t deadline = millis() + 1000;
   while (client.connected() && millis() < deadline) {
-    if (client.available()) {
-      char c = client.read();
-      if (c == '\n') break;
-      if (c != '\r') reqLine += c;
-      if (reqLine.length() > 128) break;  // guard against junk
+    if (!client.available()) continue;
+    char c = client.read();
+    if (c == '\n') {
+      if (firstLine) {
+        reqLine = line;
+        firstLine = false;
+      } else if (line.length() == 0) {
+        break;  // blank line: end of headers
+      } else if (line.indexOf("Authorization:") == 0 ||
+                 line.indexOf("authorization:") == 0) {
+        authHeader = line;
+      }
+      line = "";
+      if (++headerCount > 40) break;  // cap header count
+    } else if (c != '\r') {
+      if (line.length() < 256) line += c;  // cap line length
     }
   }
-  // Drain the rest of the headers so the client is happy.
-  while (client.available()) client.read();
+
+  // Optional token gate (see STATUS_SERVER_TOKEN). Fail closed on mismatch.
+  if (strlen(STATUS_SERVER_TOKEN) > 0 && !requestAuthorized(reqLine, authHeader)) {
+    client.print(F("HTTP/1.1 401 Unauthorized\r\n"
+                   "WWW-Authenticate: Bearer\r\n"
+                   "Content-Type: text/plain; charset=utf-8\r\n"
+                   "Cache-Control: no-store\r\nConnection: close\r\n\r\n"
+                   "Unauthorized\n"));
+    client.flush();
+    delay(2);
+    client.stop();
+    return;
+  }
+
+  // Common hardening headers applied to every successful response.
+  // - nosniff: don't let the browser MIME-guess
+  // - DENY framing + restrictive CSP: this page is not meant to be embedded
+  // - no-store: status is live; never cache it
+  // - no wildcard CORS: the page is same-origin, so none is needed
+  static const char kSecurityHeaders[] =
+      "X-Content-Type-Options: nosniff\r\n"
+      "X-Frame-Options: DENY\r\n"
+      "Referrer-Policy: no-referrer\r\n"
+      "Cache-Control: no-store\r\n"
+      "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; "
+      "script-src 'unsafe-inline'; connect-src 'self'\r\n";
 
   bool wantsJson = reqLine.indexOf("/api/status") >= 0;
   if (wantsJson) {
-    client.print(F("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
-                   "Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"));
+    client.print(F("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"));
+    client.print(kSecurityHeaders);
+    client.print(F("Connection: close\r\n\r\n"));
     sendJson(client, gw);
   } else {
-    client.print(F("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
-                   "Connection: close\r\n\r\n"));
+    client.print(F("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"));
+    client.print(kSecurityHeaders);
+    client.print(F("Connection: close\r\n\r\n"));
     sendHtml(client);
   }
   client.flush();
@@ -119,4 +162,17 @@ void StatusServer::handleClient(const VpnGateway& gw) {
 #else
   (void)gw;
 #endif
+}
+
+bool StatusServer::requestAuthorized(const String& reqLine, const String& authHeader) {
+  const char* token = STATUS_SERVER_TOKEN;
+  if (strlen(token) == 0) return true;  // no token configured -> open
+
+  // Accept "Authorization: Bearer <token>" or a "?token=<token>" query param.
+  char bearer[80];
+  char query[80];
+  snprintf(bearer, sizeof(bearer), "Bearer %s", token);
+  snprintf(query, sizeof(query), "token=%s", token);
+  return strstr(authHeader.c_str(), bearer) != nullptr ||
+         strstr(reqLine.c_str(), query) != nullptr;
 }

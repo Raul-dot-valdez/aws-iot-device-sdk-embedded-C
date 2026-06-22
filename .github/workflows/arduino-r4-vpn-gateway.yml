@@ -1,9 +1,9 @@
 name: Arduino R4 VPN Gateway
 
-# Focused CI for the arduino-r4-vpn-gateway/ project only. It compiles the
-# sketch for the real Arduino UNO R4 WiFi target, which proves the firmware
-# builds bare-metal (no RTOS) for the board. Deliberately scoped with `paths`
-# so it never runs on — and is never gated by — the unrelated AWS IoT SDK code.
+# Focused CI for the arduino-r4-vpn-gateway/ project only. Compiles the sketch
+# for the real Arduino UNO R4 WiFi target (proving it builds bare-metal, no
+# RTOS) and scans for accidentally-committed secrets. Path-scoped so it never
+# runs on — and is never gated by — the unrelated AWS IoT SDK code.
 
 on:
   push:
@@ -16,16 +16,57 @@ on:
       - '.github/workflows/arduino-r4-vpn-gateway.yml'
   workflow_dispatch:
 
+# Least privilege: this workflow only needs to read the repo.
+permissions:
+  contents: read
+
 jobs:
+  secret-scan:
+    name: Scan for committed secrets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Ensure no real secrets are committed
+        run: |
+          cd arduino-r4-vpn-gateway
+          fail=0
+          # A real, untracked secrets.h must never be committed.
+          if git ls-files --error-unmatch src/secrets.h >/dev/null 2>&1; then
+            echo "::error::src/secrets.h is committed; it must stay local/git-ignored."
+            fail=1
+          fi
+          # config.h must still contain the PASTE_ placeholders (i.e. no key pasted in).
+          if ! grep -q 'PASTE_DEVICE_PRIVATE_KEY_HERE' src/config.h; then
+            echo "::error::config.h no longer has the placeholder device key — a real key may have been committed."
+            fail=1
+          fi
+          # No private key material anywhere in the project.
+          if grep -rqs -- '-----BEGIN .*PRIVATE KEY-----' .; then
+            echo "::error::A PEM private key block is committed in the project."
+            fail=1
+          fi
+          # No tracked *.key files.
+          if git ls-files '*.key' | grep -q .; then
+            echo "::error::Tracked *.key file(s) found."
+            fail=1
+          fi
+          if [ "$fail" -eq 0 ]; then echo "OK: no committed secrets detected."; fi
+          exit $fail
+
   compile:
     name: Compile sketch for UNO R4 WiFi
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Set up Arduino CLI
-        uses: arduino/setup-arduino-cli@v2
+        uses: arduino/setup-arduino-cli@v2 # TODO: pin to a commit SHA via Dependabot
 
       - name: Install UNO R4 core and libraries
         run: |

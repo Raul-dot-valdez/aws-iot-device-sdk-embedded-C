@@ -66,18 +66,20 @@ This project is glue + UX on top of excellent existing work — exactly the
 arduino-r4-vpn-gateway/
 ├── arduino-r4-vpn-gateway.ino   # main sketch (Arduino IDE entry point)
 ├── platformio.ini               # PlatformIO build (UNO R4 WiFi)
+├── SECURITY.md                  # threat model + 2026 hardening
 ├── src/
 │   ├── config.h                 # ← edit this: WiFi + WireGuard + options
+│   ├── secrets.h.example        # template for git-ignored secrets.h
 │   ├── VpnGateway.{h,cpp}        # WiFi + tunnel state machine (+ simulator)
 │   ├── LedDashboard.{h,cpp}      # 12×8 matrix animations
-│   └── StatusServer.{h,cpp}      # read-only HTTP status page + JSON
+│   └── StatusServer.{h,cpp}      # read-only, hardened HTTP status page + JSON
 ├── examples/
 │   └── led_patterns_demo/        # preview every animation, no WiFi needed
 └── docs/
     ├── USAGE.md                  # ← plain-language guide for a normal user
     ├── ARCHITECTURE.md           # how the pieces fit
     ├── WIRING.md                 # (spoiler: there's no wiring)
-    └── server-setup/             # WireGuard server config + bootstrap script
+    └── server-setup/             # WireGuard server config + hardening scripts
 ```
 
 > **New here / not a networking person?** Start with the simple walkthrough in
@@ -206,16 +208,32 @@ uptime, last-handshake age). Machine-readable JSON is at
 
 ---
 
-## 🔒 Keeping your keys out of git
+## 🔒 Security (2026 practices)
 
-`config.h` holds secrets for convenience. Before committing your own copy:
+Security is designed in, not bolted on. Full details and the threat model are
+in [`SECURITY.md`](SECURITY.md); the essentials:
 
-* move secrets into a `secrets.h` and `#include` it from `config.h`, then add
-  `secrets.h` to `.gitignore` (a starter `.gitignore` is included), **or**
-* keep `config.h` untracked locally (`git update-index --skip-worktree`).
+* **Secrets stay out of git.** Copy `src/secrets.h.example` → `src/secrets.h`
+  (git-ignored) and put your WiFi password and WireGuard keys there. `config.h`
+  includes it automatically and only ever ships obvious placeholders. CI fails
+  if a real key or a `secrets.h` is committed.
+* **Fail-closed.** In live mode the board refuses to start the tunnel (LED shows
+  a big X) if the keys are still placeholders — no accidental "open" device.
+* **Hardened status page.** Read-only, sends `nosniff` / `DENY` framing / strict
+  CSP / `no-store`, uses no wildcard CORS, bounds request parsing, and supports
+  an optional `STATUS_SERVER_TOKEN` (Bearer / `?token=`) that fails closed.
+  Keep it on your LAN — never port-forward it.
+* **Optional PSK** (`WG_PRESHARED_KEY`) adds a symmetric, post-quantum-hardening
+  layer to the tunnel.
+* **Server hardening.** Run [`docs/server-setup/harden-server.sh`](docs/server-setup/harden-server.sh)
+  for a default-deny firewall, fail2ban, automatic security updates, and
+  key-only SSH.
+* **Supply chain.** This project's CI runs least-privilege (`contents: read`),
+  pins `actions/checkout` to a commit SHA, disables credential persistence, and
+  runs a secret-scan.
 
-Never commit a real `WG_PRIVATE_KEY` or WiFi password. The values shipped here
-are obvious placeholders.
+Never commit a real `WG_PRIVATE_KEY` or WiFi password — that's what `secrets.h`
+is for.
 
 ## 📏 Scope & limitations
 
