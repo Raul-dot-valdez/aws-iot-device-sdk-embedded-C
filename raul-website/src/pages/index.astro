@@ -1,0 +1,41 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+// Pull the 3 most recent published posts to feature on the homepage.
+const posts = (await getCollection('blog', ({ data }) => !data.draft))
+  .sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf())
+  .slice(0, 3);
+
+const dateFmt = new Intl.DateTimeFormat('en-US', { dateStyle: 'long' });
+---
+
+<BaseLayout title="Raul Valdez — Home">
+  <section class="hero">
+    <h1 style="margin-top:0">Hi, I'm Raul 👋</h1>
+    <p>
+      Welcome to my personal website. Use the menu above to explore, or read my
+      latest writing on the blog.
+    </p>
+    <a class="button" href="/blog">Read the blog</a>
+  </section>
+
+  <h2>Latest posts</h2>
+  {
+    posts.length === 0 ? (
+      <p>No posts yet — check back soon!</p>
+    ) : (
+      <ul class="post-list">
+        {posts.map((post) => (
+          <li>
+            <h2>
+              <a href={`/blog/${post.id}/`}>{post.data.title}</a>
+            </h2>
+            <p class="post-meta">{dateFmt.format(post.data.date)}</p>
+            {post.data.description && <p>{post.data.description}</p>}
+          </li>
+        ))}
+      </ul>
+    )
+  }
+</BaseLayout>

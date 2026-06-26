@@ -1,0 +1,41 @@
+# Decap CMS configuration — controls the /admin editor.
+#
+# IMPORTANT: update the two values marked "EDIT ME" after you create the repo
+# and deploy to Cloudflare Pages.
+
+backend:
+  name: github
+  repo: Raul-dot-valdez/raul-website # EDIT ME: must match your GitHub repo (owner/name)
+  branch: main
+  # base_url is the deployed site that hosts the login function (/api/auth).
+  # Use your Cloudflare Pages URL, then switch to your custom domain if you add one.
+  base_url: https://raul-website.pages.dev # EDIT ME: your live site URL
+  auth_endpoint: /api/auth
+
+# Where uploaded images are stored in the repo and how they are referenced on the site.
+media_folder: "public/uploads"
+public_folder: "/uploads"
+
+# Friendlier commit messages when you publish from the editor.
+backend_commit_messages:
+  create: 'Create {{collection}} "{{slug}}"'
+  update: 'Update {{collection}} "{{slug}}"'
+  delete: 'Delete {{collection}} "{{slug}}"'
+  uploadMedia: 'Upload "{{path}}"'
+  deleteMedia: 'Delete "{{path}}"'
+
+collections:
+  - name: "blog"
+    label: "Blog Posts"
+    label_singular: "Blog Post"
+    folder: "src/content/blog"
+    create: true
+    slug: "{{slug}}"
+    extension: "md"
+    format: "frontmatter"
+    fields:
+      - { label: "Title", name: "title", widget: "string" }
+      - { label: "Publish Date", name: "date", widget: "datetime" }
+      - { label: "Short description", name: "description", widget: "text", required: false }
+      - { label: "Draft (hide from site)", name: "draft", widget: "boolean", default: false, required: false }
+      - { label: "Body", name: "body", widget: "markdown" }
